@@ -1,1 +1,2 @@
-
+used google collab instead of kaggle and jupyter notebook
+then used xgboost without regularization(underfitting in major cases and overfitting in 1-3 cases)
