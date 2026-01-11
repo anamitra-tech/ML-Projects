@@ -3,3 +3,5 @@ then used xgboost without regularization(underfitting in major cases and overfit
 -trained the whole data set so got an average of RMSE-0.024
                                                  MAE-0.015
 -then trained comapny wise(which was obvious)  of worst and of best companies so avergae didint much changed
+                                                Average RMSE: 0.02479
+                                                Average MAE : 0.01767
