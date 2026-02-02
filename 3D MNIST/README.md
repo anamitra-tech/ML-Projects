@@ -3,6 +3,8 @@
 This repository contains the implementation and optimization of **3D Convolutional Neural Networks (Conv3D)** for classifying 3D digit data by benchmarking different architectural changes and regularization and successfully able to 
 
 ---
+![3D Point Cloud Rotation](digit_3d.gif)
+
 
 ## 📊 Performance Summary
 * [cite_start]**Baseline Accuracy:** 75.67%[cite: 2].
