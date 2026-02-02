@@ -7,9 +7,13 @@ This repository contains the implementation and optimization of **3D Convolution
 
 
 ## 📊 Performance Summary
-* [cite_start]**Baseline Accuracy:** 75.67%[cite: 2].
-* [cite_start]**Optimized Accuracy:** 77.35%[cite: 2].
-* [cite_start]**Key Improvements:** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Baseline Accuracy:** 70.07%
+* **Optimized Accuracy1:** 72.20%
+* **Key Improvements1:** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Optimized Accuracy2:** 74.35%
+* **Key Improvements2:** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Optimized Accuracy(final):** 75.35%
+* **Key Improvements(final):** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
 
 ---
 
