@@ -10,15 +10,15 @@ In this business context, the **primary goal is to identify as many churned cust
 ---
 
 ## ⚖️ Dataset Challenge: Class Imbalance
-- Majority class: Non-churn
-- Minority class: Churn
+- Majority class: Non-churn  
+- Minority class: Churn  
 
-**Why imbalance matters:**
+**Why imbalance matters:**  
 A model can achieve high accuracy by always predicting “No Churn” — but that would be useless for business.
 
 Therefore:
-- Accuracy ❌ misleading
-- Recall ✅ critical
+- Accuracy ❌ misleading  
+- Recall ✅ critical  
 - F1-score ✅ secondary (balance metric)
 
 ---
@@ -32,9 +32,10 @@ All models were evaluated using **Stratified Cross-Validation** to preserve chur
 - XGBoost  
 
 Each model was:
-- Class-weighted / imbalance-aware
-- Evaluated using **Recall & F1-score**
-- Tested using a recall-oriented probability threshold
+- Class-weighted / imbalance-aware  
+- Evaluated using **Recall & F1-score**  
+- Tested using a recall-oriented probability threshold  
+- **Preprocessed *after* train–validation splitting to prevent data leakage and ensure honest cross-validation performance**
 
 ---
 
@@ -76,8 +77,8 @@ Fundamentally:
 - Noise is suppressed
 
 **Impact on churn prediction:**
-- Fewer false positives ✅
-- More missed churners ❌
+- Fewer false positives ✅  
+- More missed churners ❌  
 
 ➡️ Lower recall is an expected outcome, not a failure.
 
@@ -86,12 +87,12 @@ Fundamentally:
 ## 💼 Business Interpretation of “Noise”
 
 In churn prediction:
-- False Positive = Customer flagged as churn risk but stays
-- False Negative = Customer churns without intervention
+- False Positive = Customer flagged as churn risk but stays  
+- False Negative = Customer churns without intervention  
 
 **Cost comparison:**
-- False Positive → email / discount / call
-- False Negative → lost customer + lifetime value
+- False Positive → email / discount / call  
+- False Negative → lost customer + lifetime value  
 
 ➡️ Accepting noise is cheaper than missing churn.
 
@@ -103,19 +104,20 @@ There is **no universally best model**.
 
 > The best model is the one that aligns with the **cost structure of the problem**.
 
-- XGBoost → precision-oriented, high confidence
-- Random Forest → recall-oriented, robust to imbalance
+- XGBoost → precision-oriented, high confidence  
+- Random Forest → recall-oriented, robust to imbalance  
 
 For churn prevention:
-- Recall dominates
-- Random Forest aligns better
+- Recall dominates  
+- Random Forest aligns better  
 
+---
 
 ## 🚀 What This Demonstrates
-- Understanding of **model fundamentals**
-- Correct metric selection for imbalanced data
-- Business-aligned ML decision making
-- Ability to challenge “model hype” with evidence
+- Understanding of **model fundamentals**  
+- Correct metric selection for imbalanced data  
+- **Awareness and prevention of data leakage through fold-wise preprocessing**  
+- Business-aligned ML decision making  
+- Ability to challenge “model hype” with evidence  
 
 📌 *Model choice driven by reasoning, not reputation.*
-
