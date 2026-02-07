@@ -474,7 +474,8 @@ plt.show()
 ## Known Issues
 
 1. **Discrepancy 1 & 2**: Document mentions discrepancies but doesn't detail them
-2. **Without regularization produces wrong results**: Always use regularized version
+2. ![Regularization Comparison](./images/regularization_comparison.png)
+3. **Without regularization produces wrong results**: Always use regularized version
 
 ---
 
@@ -487,32 +488,4 @@ plt.show()
 - Include transaction costs in backtesting
 - Experiment with different threshold values
 - Add class balancing techniques
-
----
-
-## License
-
-[Specify your license here]
-
-## Contributing
-
-[Specify contribution guidelines]
-
-## Contact
-
-[Your contact information]
-
----
-
-## References
-
-- Dataset: World-Stock-Prices-Dataset.csv
-- Model: scikit-learn MLPClassifier
-- Alternative: LSTM (TensorFlow/PyTorch)
-
----
-
-**Last Updated**: 2024
-
-**Version**: 1.0
 
