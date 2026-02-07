@@ -473,10 +473,10 @@ plt.show()
 
 ## Known Issues
 
+
 1. **Discrepancy 1 & 2**: Document mentions discrepancies but doesn't detail them
 2. ![Regularization Comparison](./images/regularization_comparison.png)
 3. **Without regularization produces wrong results**: Always use regularized version
-
 ---
 
 ## Future Improvements
