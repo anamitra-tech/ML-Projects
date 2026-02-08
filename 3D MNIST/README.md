@@ -10,29 +10,29 @@ This repository contains the implementation and optimization of **3D Convolution
 
 * **Baseline Accuracy:** 70.07%
 * **Optimized Accuracy1:** 72.20%
-* **Key Improvements1:** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Key Improvements1:** Transitioned to deeper filter blocks and implemented L2 regularization.
 * **Optimized Accuracy2:** 74.35%
-* **Key Improvements2:** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Key Improvements2:** Transitioned to deeper filter blocks and implemented L2 regularization.
 * **Optimized Accuracy (final):** 75.35%
-* **Key Improvements (final):** Transitioned to deeper filter blocks and implemented L2 regularization[cite: 2, 4].
+* **Key Improvements (final):** Transitioned to deeper filter blocks and implemented L2 regularization.
 
 ---
 
 ## 🏗️ Model Evolution
 
 ### 1. Baseline Architecture
-[cite_start]The initial model used a three-block structure with increasing filter sizes (16, 32, 64)[cite: 1]:
+The initial model used a three-block structure with increasing filter sizes (16, 32, 64):
 
-* [cite_start]**Conv3D Blocks:** 3x3x3 kernels with ReLU activation and 'same' padding[cite: 1].
-* [cite_start]**Normalization:** `BatchNormalization()` after every convolution[cite: 1].
-* [cite_start]**Downsampling:** `MaxPooling3D(2)`[cite: 1].
-* [cite_start]**Head:** Flatten followed by a Dense layer (128 units) and **Dropout (0.5)**[cite: 1].
+* **Conv3D Blocks:** 3x3x3 kernels with ReLU activation and 'same' padding.
+* **Normalization:** `BatchNormalization()` after every convolution.
+* **Downsampling:** `MaxPooling3D(2)`.
+* **Head:** Flatten followed by a Dense layer (128 units) and **Dropout (0.5)**.
 
 ### 2. Optimized High-Capacity Model
-[cite_start]To improve accuracy, the filter density was increased (64, 128, 256) and the Dense layer was expanded to 256 units[cite: 2]:
+To improve accuracy, the filter density was increased (64, 128, 256) and the Dense layer was expanded to 256 units:
 
-* [cite_start]**Increased Filters:** Captured more complex spatial features[cite: 2].
-* [cite_start]**Expanded Dense Layer:** 256 units for better classification power[cite: 2].
+* **Increased Filters:** Captured more complex spatial features.
+* **Expanded Dense Layer:** 256 units for better classification power.
 
 ---
 
@@ -42,13 +42,13 @@ To combat overfitting and maximize model performance, **a systematic hyperparame
 
 ### **Regularization Techniques Applied:**
 
-* **Kernel L2 Regularization:** Added `kernel_regularizer=l2(1e-4)` to Conv3D layers to penalize weight complexity and prevent overfitting[cite: 3, 4]. **Fine-tuned L2 penalty values** (1e-3, 1e-4, 1e-5) and evaluated impact on validation loss.
+* **Kernel L2 Regularization:** Added `kernel_regularizer=l2(1e-4)` to Conv3D layers to penalize weight complexity and prevent overfitting. **Fine-tuned L2 penalty values** (1e-3, 1e-4, 1e-5) and evaluated impact on validation loss.
 
-* **Dropout Regularization:** Applied **Dropout (0.5)** in the Dense layer to randomly deactivate neurons during training[cite: 1]. **Tested multiple dropout rates** (0.3, 0.5, 0.7) to find optimal regularization strength.
+* **Dropout Regularization:** Applied **Dropout (0.5)** in the Dense layer to randomly deactivate neurons during training. **Tested multiple dropout rates** (0.3, 0.5, 0.7) to find optimal regularization strength.
 
-* **Early Stopping:** Implemented to halt training when validation loss plateaued, preventing unnecessary overfitting[cite: 3]. **Patience levels (5, 10, 15) were systematically tested** to balance training time and convergence[cite: 3, 5].
+* **Early Stopping:** Implemented to halt training when validation loss plateaued, preventing unnecessary overfitting. **Patience levels (5, 10, 15) were systematically tested** to balance training time and convergence.
 
-* **Batch Normalization:** Applied after each Conv3D layer to stabilize training and accelerate convergence[cite: 1].
+* **Batch Normalization:** Applied after each Conv3D layer to stabilize training and accelerate convergence.
 
 ### **Optimizer and Learning Rate Tuning:**
 
@@ -62,13 +62,13 @@ To combat overfitting and maximize model performance, **a systematic hyperparame
 
 * **Epochs:** Ran experiments with **50, 100, and 150 epochs** in combination with Early Stopping to determine ideal training duration.
 
-* **Architecture Variations:** **Systematically compared different filter configurations** (16-32-64 vs. 64-128-256) and Dense layer sizes (128 vs. 256 units) under identical hyperparameter settings[cite: 6].
+* **Architecture Variations:** **Systematically compared different filter configurations** (16-32-64 vs. 64-128-256) and Dense layer sizes (128 vs. 256 units) under identical hyperparameter settings.
 
 ### **Iterative Evaluation:**
 
 * **After each hyperparameter adjustment, validation accuracy and loss were recorded** to isolate the effect of individual changes.
 
-* **Performance metrics, confusion matrices, and loss curves were generated at every tuning stage** to ensure each modification contributed positively to the final model[cite: 1, 4, 6].
+* **Performance metrics, confusion matrices, and loss curves were generated at every tuning stage** to ensure each modification contributed positively to the final model.
 
 ---
 
@@ -183,8 +183,8 @@ This final architecture succeeds because:
 
 The project used the following metrics to evaluate success:
 
-* [cite_start]**Training vs. Validation Loss:** Monitored to ensure the model wasn't just memorizing data[cite: 1, 4, 6].
-* [cite_start]**Confusion Matrix:** Analyzed to identify which 3D digits were most frequently confused by the network[cite: 1, 6].
+* **Training vs. Validation Loss:** Monitored to ensure the model wasn't just memorizing data.
+* **Confusion Matrix:** Analyzed to identify which 3D digits were most frequently confused by the network.
 
 ---
 
@@ -251,3 +251,4 @@ This project is licensed under the MIT License.
 ## 🙏 Acknowledgments
 
 Special thanks to the deep learning community for insights on 3D CNNs and regularization techniques.
+
