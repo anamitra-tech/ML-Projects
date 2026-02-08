@@ -240,15 +240,4 @@ history = model.fit(
 4. **Architecture depth matters**, but there's a sweet spot—too shallow underfits, too deep overfits
 5. **Fine-grained learning rate control** with Adam optimizer ensures stable convergence
 
----
-
-## 📝 License
-
-This project is licensed under the MIT License.
-
----
-
-## 🙏 Acknowledgments
-
-Special thanks to the deep learning community for insights on 3D CNNs and regularization techniques.
 
