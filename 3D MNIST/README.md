@@ -1,6 +1,6 @@
 # 3D MNIST Classification Project
 
-This repository contains the implementation and optimization of **3D Convolutional Neural Networks (Conv3D)** for classifying 3D digit data, successfully improving accuracy from **70% to approximately 76%** through systematic architecture refinement, regularization techniques, and robust cross-validation.
+This repository contains the implementation and optimization of **3D Convolutional Neural Networks (Conv3D)** for classifying 3D digit data, successfully improving accuracy from **60% to approximately 76%** through systematic architecture refinement, regularization techniques, and  cross-validation.
 
 ---
 
@@ -8,9 +8,10 @@ This repository contains the implementation and optimization of **3D Convolution
 
 ## 📊 Performance Summary
 
-* **Baseline Accuracy:** 70.07%
-* **Optimized Accuracy 1:** 72.20%
-  * **Key Improvements:** Transitioned to deeper filter blocks and implemented L2 regularization
+
+* **Accuracy 1:** 60.07%
+  * **Key Improvements:** converted the 3D-MNIST voxel data into 2D using standard projection methods(PCA)
+     and trained a 2D CNN
 * **Optimized Accuracy 2:** 74.35%
   * **Key Improvements:** Enhanced filter configurations and refined regularization parameters
 * **Optimized Accuracy 3:** 75.35%
@@ -19,6 +20,11 @@ This repository contains the implementation and optimization of **3D Convolution
   * **Key Improvements:** Implemented Stratified K-Fold Cross-Validation, uniform filter architecture, and optimized training strategy
 
 ---
+## Very first approach used:
+* I tested a 2D CNN by projecting 3D-MNIST into 2D, but because the digits are randomly rotated in 3D, a single fixed projection collapses different digits into similar shapes, creating an accuracy ceiling that model tuning cannot overcome.
+* Improving performance requires rotation-aware representations such as alignment, multi-view projections, or point-cloud-based models rather than a direct 2D reduction.
+<img width="365" height="311" alt="image" src="https://github.com/user-attachments/assets/e1f13225-4979-4bf1-85bd-c986de0e2eab" />
+
 
 ## 🏗️ Model Evolution
 
@@ -41,7 +47,7 @@ Through iterative experimentation, the model evolved through multiple configurat
 
 ## 🛠️ Comprehensive Regularization & Optimization Strategy
 
-To combat overfitting and maximize model performance, a **systematic hyperparameter tuning approach** was implemented, with results generated and analyzed after each modification:
+To combat overfitting and maximize model performance, a **systematic hyperparameter tuning approach**(instead of guessing) was implemented, with results generated and analyzed after each modification:
 
 ### **Regularization Techniques Applied:**
 
