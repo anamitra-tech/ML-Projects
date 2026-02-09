@@ -25,6 +25,11 @@ This repository contains the implementation and optimization of **3D Convolution
 * Improving performance requires rotation-aware representations such as alignment, multi-view projections, or point-cloud-based models rather than a direct 2D reduction.
 <img width="365" height="311" alt="image" src="https://github.com/user-attachments/assets/e1f13225-4979-4bf1-85bd-c986de0e2eab" />
 
+*why so low accuracy*-
+*3D → 2D failed because rotation is a many-to-one operation under projection.
+
+When a 3D digit is randomly rotated, projecting it to a single 2D plane destroys orientation information. Different 3D shapes—even different digits—can produce the same or very similar 2D silhouette when viewed from certain angles. Once that happens, no 2D CNN can recover what was lost, because the missing information is gone before learning even starts.
+
 
 ## 🏗️ Model Evolution
 
