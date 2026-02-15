@@ -1,6 +1,6 @@
 # 3D MNIST Classification Project
 
-This repository contains the implementation and optimization of **3D Convolutional Neural Networks (Conv3D)** for classifying 3D digit data, successfully improving accuracy from **60% to approximately 76%** through systematic architecture refinement, regularization techniques, and  cross-validation.
+This repository contains the implementation and optimization of **3D Convolutional Neural Networks (Conv3D)** for classifying 3D digit data, successfully improving accuracy from **60% to approximately 79%** through systematic architecture refinement, regularization techniques, and  cross-validation.
 
 ---
 
@@ -16,8 +16,10 @@ This repository contains the implementation and optimization of **3D Convolution
   * **Key Improvements:** Enhanced filter configurations and refined regularization parameters
 * **Optimized Accuracy 3:** 75.35%
   * **Key Improvements:** Further architecture refinement and hyperparameter optimization
-* **Final Optimized Accuracy:** ~76%
+* **Optimized Accuracy4:** ~76%
   * **Key Improvements:** Implemented Stratified K-Fold Cross-Validation, uniform filter architecture, and optimized training strategy
+* **Final Optimized Accuracy:** ~79%
+* **Key Improvements:** Implemented Stratified K-Fold Cross-Validation, changed model architecture, and used ReduceLROnPlateau
 
 ---
 ## Very first approach used:
