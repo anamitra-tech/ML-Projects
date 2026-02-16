@@ -338,6 +338,3 @@ UNCERTAINTY_MAX = 0.15  # Max uncertainty for confident trades
 5. **Per-ticker models** learn stock-specific patterns better than universal models
 
 **Bottom Line**: This isn't just a model that predicts up/down—it's a system that **knows what it knows** and **admits what it doesn't**, making it production-ready for real trading decisions.
-
----
- Dropout)
