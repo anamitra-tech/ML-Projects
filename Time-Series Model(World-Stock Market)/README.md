@@ -27,7 +27,7 @@ This project analyzes historical stock prices (Open, High, Low, Close, Volume) a
 ### Evaluation Methodology
 
 **Test Setup:**
-- Dataset: 61 stocks, 1000+ days each
+- Dataset: 61 stocks, every month-each days
 - Split: 80% train / 20% test (time-based)
 - Metric: Accuracy on held-out test set
 - Comparison: Baseline MLP vs. Enhanced LSTM + MC Dropout
