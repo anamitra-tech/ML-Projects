@@ -1,5 +1,3 @@
-# 🧘 ARVYAX — Reflective Session ML Pipeline
-
 > **Dual-output classification pipeline** that predicts emotional state + session intensity from journal entries, face emotion signals, and ambient session metadata — then generates a personalised recommendation using a pure attention mechanism.
 
 <br>
@@ -721,15 +719,3 @@ v3.0  + Stratified 3-fold CV (final)         54.4%      ~10 pts        current
 <br>
 
 ---
-
-<div align="center">
-
-**Built for Arvyax Reflective Session Platform**
-
-*Dual-output emotion classification with attention-based personalised recommendations*
-
-![Made with ❤️](https://img.shields.io/badge/Made%20with-%E2%9D%A4%EF%B8%8F-red?style=flat-square)
-![No if/else in recommendations](https://img.shields.io/badge/Recommendations-Zero%20if%2Felse-6366F1?style=flat-square)
-![Honest CV](https://img.shields.io/badge/Evaluation-No%20Data%20Leakage-22C55E?style=flat-square)
-
-</div>
