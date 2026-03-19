@@ -39,7 +39,7 @@ Each Arvyax reflective session produces a short journal entry, a face emotion hi
 | Target | Task | Classes | Best Acc |
 |--------|------|---------|----------|
 | **Y1** — Emotional State | 6-class classification | calm · focused · mixed · neutral · overwhelmed · restless | **54.4% CV** |
-| **Y2** — Session Intensity | 5-class classification → 3-bucket | 1 · 2 · 3 · 4 · 5 | **42.2% val (3-bucket)** |
+| **Y2** — Session Intensity | 5-class classification → 3-bucket | 0 · 1 · 2 | **42.2% val (3-bucket)** |
 
 After prediction, a **soft attention recommendation engine** (zero if/else) selects the most relevant wellbeing recommendation from 8 templates using the predicted class probability vector as a query.
 
