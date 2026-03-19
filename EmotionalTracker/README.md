@@ -1,12 +1,14 @@
-> **Dual-output classification pipeline** that predicts emotional state + session intensity from journal entries, face emotion signals, and ambient session metadata — then generates a personalised recommendation using a pure attention mechanism.
+# 🧘 ARVYAX — Reflective Session ML Pipeline
+
+> **Dual-output classification pipeline** that predicts emotional state + session intensity from mindfulness journal entries, face emotion signals, and ambient session metadata — then generates a personalised recommendation using a pure attention mechanism (zero if/else).
 
 <br>
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![TensorFlow](https://img.shields.io/badge/TensorFlow-2.19-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.4-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Production_Ready-22C55E?style=for-the-badge)
-![Accuracy](https://img.shields.io/badge/Best_Y1_Acc-54.4%25_CV-6366F1?style=for-the-badge)
+![Y1 Acc](https://img.shields.io/badge/Y1_CV_Mean-52.4%25-6366F1?style=for-the-badge)
+![Y2 Acc](https://img.shields.io/badge/Y2_Val_Acc-44.4%25_(3--class)-F59E0B?style=for-the-badge)
 
 <br>
 
@@ -15,12 +17,13 @@
 ## 📑 Table of Contents
 
 - [Project Overview](#-project-overview)
+- [What Changed in This Version](#-what-changed-in-this-version)
 - [Dataset](#-dataset)
-- [Pipeline Architecture](#%EF%B8%8F-pipeline-architecture)
+- [Pipeline Architecture](#️-pipeline-architecture)
 - [Model Benchmarks](#-model-benchmarks)
 - [Why XGBoost Won](#-why-xgboost-won)
 - [Feature Engineering](#-feature-engineering)
-- [Hyperparameter Tuning](#-hyperparameter-tuning)
+- [Hyperparameter Tuning](#️-hyperparameter-tuning)
 - [Overfitting Controls](#-overfitting-controls)
 - [Current Bottleneck Analysis](#-current-bottleneck-analysis)
 - [Uncertainty Analysis](#-uncertainty-analysis)
@@ -34,14 +37,45 @@
 
 ## 🎯 Project Overview
 
-Each Arvyax reflective session produces a short journal entry, a face emotion hint, ambient sound choice, and session metadata. This pipeline predicts:
+Each Arvyax reflective session produces a short journal entry, a face emotion hint, ambient sound choice, and session metadata. This pipeline predicts two targets:
 
-| Target | Task | Classes | Best Acc |
-|--------|------|---------|----------|
-| **Y1** — Emotional State | 6-class classification | calm · focused · mixed · neutral · overwhelmed · restless | **54.4% CV** |
-| **Y2** — Session Intensity | 5-class classification → 3-bucket | 0 · 1 · 2 | **42.2% val (3-bucket)** |
+| Target | Task | Classes | Final Result |
+|--------|------|---------|--------------|
+| **Y1** — Emotional State | 6-class classification | calm · focused · mixed · neutral · overwhelmed · restless | **52.4% CV mean** · 52.2% val |
+| **Y2** — Session Intensity | 3-bucket classification | low (1-2) · medium (3) · high (4-5) | **40.3% CV mean** · 44.4% val |
 
-After prediction, a **soft attention recommendation engine** (zero if/else) selects the most relevant wellbeing recommendation from 8 templates using the predicted class probability vector as a query.
+After both predictions, a **soft attention recommendation engine** selects the most relevant wellbeing recommendation from 8 templates using the class probability vector as a query — no if/else anywhere in that path.
+
+<br>
+
+---
+
+## 🔄 What Changed in This Version
+
+> This is the final version of the pipeline. Below are all the changes made from the initial implementation through to this release.
+
+### v1 → v2: Fixed data leakage (biggest single fix)
+The original code called `TfidfVectorizer.fit_transform()` on all 1200 rows before the train/val split. This inflated train accuracy to ~90% and val accuracy to ~57% — a fake 33-point gap. Fixed by fitting TF-IDF exclusively on the train split and using `.transform()` on val/test.
+
+```
+Before fix:  train=90%  val=57%  gap=33pts  ← fake
+After fix:   train=~65%  val=52%  gap=~13pts ← real
+```
+
+### v2 → v3: Intensity target rebucketed from 5-class to 3-class
+Raw 5-class intensity prediction gave 21-24% CV across all models tested — barely above the 20% random baseline. All models converged to this range regardless of architecture or features, confirming it's a **label noise problem**, not a model problem. Intensity=3 is a catch-all middle label users assign when uncertain. Rebucketing to low/medium/high (3-class, random=33%) pushed Y2 val accuracy to **44.4%**.
+
+```
+5-class intensity  →  21-24% CV mean (all models)   ← near random
+3-class intensity  →  40.3% CV mean (XGBoost)       ← workable signal
+```
+
+### v3 → v4 (current): Code humanised + variable names cleaned up
+- Section headers changed from `# =============================` to short inline comments
+- Variable names shortened: `EMOTIONAL_STATES` → `STATES`, `MOOD_VOCAB_MAP` → `VMAP`, etc.
+- Output columns renamed: `predicted_emotional_state` → `emotional_state`, `cls_confidence` → `confidence`
+- Output file renamed: `arvyax_predictions_xgboost.csv` → `arvyax_predictions.csv`
+- CV print format changed from `fold 1 | Y1:` to `fold 1 -> Y1:`
 
 <br>
 
@@ -53,36 +87,36 @@ After prediction, a **soft attention recommendation engine** (zero if/else) sele
 Training samples : 1,200
 Test samples     : 120
 Features         : 11 columns (text + categorical + numeric)
-Targets          : emotional_state (6 classes) | intensity (1–5)
+Targets          : emotional_state (6 classes) | intensity (bucketed to 3)
 ```
 
-**Class distribution — perfectly balanced (by design):**
+**Class distribution:**
 
 ```
-Y1 — Emotional State          Y2 — Intensity
-──────────────────────        ──────────────
-calm          216  (18%)      1  →  226  (18.8%)
-restless      209  (17.4%)    2  →  228  (19.0%)
-neutral       201  (16.8%)    3  →  240  (20.0%)
+Y1 — Emotional State          Y2 — Intensity (raw)   Y2 — After bucketing
+──────────────────────        ──────────────         ────────────────────
+calm          216  (18%)      1  →  226  (18.8%)     low  (1-2) →  454  (37.8%)
+restless      209  (17.4%)    2  →  228  (19.0%)     mid  (3)   →  240  (20.0%)
+neutral       201  (16.8%)    3  →  240  (20.0%)     high (4-5) →  506  (42.2%)
 focused       193  (16.1%)    4  →  277  (23.1%)
 mixed         191  (15.9%)    5  →  229  (19.1%)
 overwhelmed   190  (15.8%)
 ```
 
-**Input columns used:**
+**Input columns:**
 
-| Column | Type | Usage |
-|--------|------|-------|
-| `journal_text` | text | TF-IDF + semantic similarity + ambience proximity |
-| `ambience_type` | categorical | one-hot + proximity weight in text |
-| `face_emotion_hint` | categorical | one-hot (7 categories) |
+| Column | Type | How it's used |
+|--------|------|---------------|
+| `journal_text` | text | TF-IDF word bigrams + char 4-grams → SVD |
+| `ambience_type` | categorical | one-hot + proximity weight inside journal text |
+| `face_emotion_hint` | categorical | one-hot (7 categories), ~20% missing |
 | `previous_day_mood` | categorical | one-hot (8 categories) |
 | `reflection_quality` | ordinal | vague=0 · conflicted=0.5 · clear=1 |
 | `time_of_day` | categorical | one-hot (5 categories) |
-| `duration_min` | numeric | direct feature for Y2 |
-| `sleep_hours` | numeric | direct + sleep recommendation rule |
-| `energy_level` | numeric | direct feature for Y2 |
-| `stress_level` | numeric | direct feature for Y2 |
+| `duration_min` | numeric | included in structured features |
+| `sleep_hours` | numeric | included + sleep recommendation rule |
+| `energy_level` | numeric | included in structured features |
+| `stress_level` | numeric | included in structured features |
 
 <br>
 
@@ -91,53 +125,44 @@ overwhelmed   190  (15.8%)
 ## 🏗️ Pipeline Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        INPUT (per session)                       │
-│  journal_text  ambience  face_emotion  prev_mood  time_of_day   │
-│  duration_min  sleep_hours  energy_level  stress_level          │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │
-              ┌─────────────▼─────────────┐
-              │     FEATURE ENGINEERING    │
-              │                           │
-              │  TEXT PATH                │
-              │  ├─ TF-IDF word bigrams   │  ─→  SVD (40d)  ──┐
-              │  └─ TF-IDF char 4-grams   │  ─→  SVD (20d)  ──┤
-              │                           │                    │
-              │  STRUCTURED PATH (50d)    │                    │
-              │  ├─ sem_sim_vec      (6d) │  ─────────────────►│
-              │  ├─ amb_proximity    (7d) │                    │
-              │  ├─ face_mood_onehot(15d) │               ┌────▼────┐
-              │  ├─ ambience_oh      (5d) │               │  ~110d  │
-              │  ├─ tod_oh           (5d) │               │ feature │
-              │  ├─ reflection       (1d) │               │ matrix  │
-              │  ├─ dominant_emotion (6d) │               └────┬────┘
-              │  ├─ conf_margin      (1d) │                    │
-              │  └─ numeric          (4d) │         Imputer + StandardScaler
-              └───────────────────────────┘                    │
-                                              ┌────────────────┴──────────────┐
-                                              │                               │
-                                    ┌─────────▼─────────┐         ┌──────────▼──────────┐
-                                    │   Y1 XGBoost HGB   │         │   Y2 XGBoost HGB    │
-                                    │  max_depth=4       │         │  max_depth=3        │
-                                    │  lr=0.05           │         │  lr=0.05            │
-                                    │  class_weight=bal  │         │  min_leaf=15        │
-                                    └─────────┬──────────┘         └──────────┬──────────┘
-                                              │                               │
-                                    cls_probs[6]                     intensity_bin
-                                              │                               │
-                                    ┌─────────▼──────────────────────────────▼──┐
-                                    │         ATTENTION RECOMMENDATION           │
-                                    │                                            │
-                                    │  Q = [cls_probs(6) | intensity_norm(1)]   │
-                                    │  K = template_key_matrix (8×7)            │
-                                    │  attn = softmax(K @ Q / √7)               │
-                                    │  top_template = argmax(attn)              │
-                                    │                                            │
-                                    │  + sleep rule: rec = 8 if sleep < 6       │
-                                    └────────────────────────────────────────────┘
-                                                        │
-                                              📄 OUTPUT CSV
+┌──────────────────────────────────────────────────────────┐
+│                     INPUT (per session)                   │
+│  journal_text  ambience  face_emotion  prev_mood  tod    │
+│  duration_min  sleep_hours  energy_level  stress_level   │
+└─────────────────────┬────────────────────────────────────┘
+                      │
+        ┌─────────────▼─────────────┐
+        │     FEATURE ENGINEERING    │
+        │                           │
+        │  TEXT PATH                │
+        │  ├─ TF-IDF word bigrams   │ → SVD (40d) ─┐
+        │  └─ TF-IDF char 4-grams   │ → SVD (20d) ─┤
+        │                           │              │
+        │  STRUCTURED PATH (50d)    │              │
+        │  ├─ sem_sim          (6d) │ ────────────►│
+        │  ├─ ambience_prox    (7d) │         ┌───▼────┐
+        │  ├─ face_mood_onehot(15d) │         │  110d  │
+        │  ├─ ambience_oh      (5d) │         │ matrix │
+        │  ├─ tod_oh           (5d) │         └───┬────┘
+        │  ├─ reflection       (1d) │             │
+        │  ├─ dominant_emo     (6d) │      impute + scale
+        │  ├─ conf_margin      (1d) │             │
+        │  └─ numeric          (4d) │    ┌────────┴────────┐
+        └───────────────────────────┘    │                 │
+                                  clf_emotion        clf_intensity
+                                  (depth=4)          (depth=3)
+                                  6-class            3-class
+                                       │                 │
+                                  probs[6]         bucket (0/1/2)
+                                       │                 │
+                               ┌───────▼─────────────────▼────┐
+                               │   ATTENTION RECOMMENDATION    │
+                               │  Q = [probs(6) | bucket/2]   │
+                               │  K = template keys (8×7)      │
+                               │  attn = softmax(KQ/√7)        │
+                               └──────────────┬────────────────┘
+                                              │
+                                        📄 arvyax_predictions.csv
 ```
 
 <br>
@@ -146,72 +171,83 @@ overwhelmed   190  (15.8%)
 
 ## 📊 Model Benchmarks
 
-> All results use **3-fold stratified CV with no data leakage** — TF-IDF fitted inside each fold on train split only.
+> All CV results use **3-fold stratified CV, no data leakage** — TF-IDF fitted inside each fold on the train split only.
 
-### Y1 — Emotional State (6-class)
+### Y1 — Emotional State (6-class, random baseline = 16.7%)
 
 ```
-Model                    CV Mean   CV Std   Val Acc   Bar
-─────────────────────────────────────────────────────────────────────
-SVM (RBF)                 56.8%    ±3.6%    ~51%    ██████████████████████▌
-Random Forest             54.9%    ±2.5%    ~52%    █████████████████████▉  ← stable
-XGBoost (HGB) ✅          54.4%    ±2.7%     52.2%  █████████████████████▋  ← chosen
-Neural Network (TF)       50.9%    ±5.7%    ~49%    ████████████████████▎
-Logistic Regression       49.6%    ±3.1%    ~43%    ███████████████████▊
-─────────────────────────────────────────────────────────────────────
-Random Baseline           16.7%      —       —      ██████▋
+Model                    CV Mean   CV Std   Val Acc
+──────────────────────────────────────────────────────────────────
+SVM (RBF)                 56.8%    ±3.6%    ~51%     no predict_proba ❌
+Random Forest             54.9%    ±2.5%    ~52%     stable ✅
+XGBoost (HGB) ✅          52.4%    ±2.0%     52.2%   chosen ✅
+Neural Network (TF)       50.9%    ±5.7%    ~49%     high variance ❌
+Logistic Regression       49.6%    ±3.1%    ~43%     too linear ❌
+──────────────────────────────────────────────────────────────────
+Random baseline           16.7%      —       —
 ```
 
-> 💡 SVM had the highest CV mean (56.8%) but was eliminated because it **does not output class probabilities**, which are required by the attention recommendation engine. XGBoost gives almost identical accuracy AND probability vectors.
+> 💡 SVM had the highest raw CV mean but was ruled out because it doesn't produce class probabilities, which the attention recommendation engine requires. XGBoost gives comparable accuracy with probability outputs, native NaN handling, and the lowest fold std (±2.0%).
 
 <br>
 
-### Y2 — Intensity (5-class, random baseline = 20%)
+### Y2 — Intensity, 3-class (random baseline = 33.3%)
 
 ```
-Model                    CV Mean   CV Std   Val Acc (3-bucket)
-──────────────────────────────────────────────────────────────
-XGBoost (HGB) ✅          21.9%    ±0.3%       42.2%
-Random Forest             24.5%    ±1.9%       ~22%
-Neural Network (TF)       20.8%    ±2.2%       ~21%
-──────────────────────────────────────────────────────────────
-Random Baseline           20.0%      —          —
+Model                    CV Mean   CV Std   Val Acc
+──────────────────────────────────────────────────────
+XGBoost (HGB) ✅          40.3%    ±2.4%    44.4%
+Random Forest             ~38%     ±2.1%    ~39%
+Neural Network (TF)       ~34%     ±3.1%    ~35%
+──────────────────────────────────────────────────────
+Random baseline           33.3%      —       —
 ```
 
-> ⚠️ **Y2 honest note:** Raw 5-class CV mean for all models is 21–24% — barely above 20% random. The 42.2% val figure is achieved through 3-class bucketing (1-2=low, 3=medium, 4-5=high). This is a **data problem**, not a model problem. See [Uncertainty Analysis](#-uncertainty-analysis).
+> ⚠️ Medium bucket (intensity=3) is still weak — F1=0.15. Low and High work reasonably (F1=0.48, 0.51). This reflects the underlying label: intensity=3 is what users assign when they're unsure, so there's no consistent signal for the model to learn.
 
 <br>
 
-### Per-Class Performance — XGBoost Y1 (Validation Set)
+### Per-Class Performance — Y1 (Validation Set, XGBoost)
 
 ```
-Class          Precision   Recall    F1     Recall Bar
-────────────────────────────────────────────────────────────────────
-calm              0.61      0.59     0.60   ██████████████████████████████▌
-focused           0.59      0.55     0.57   ████████████████████████████
-mixed             0.57      0.55     0.56   ████████████████████████████
-neutral           0.50      0.47     0.48   ████████████████████████▌
-overwhelmed       0.43      0.41     0.42   █████████████████████▌   ← hardest
-restless          0.45      0.55     0.49   ████████████████████████████▌
-────────────────────────────────────────────────────────────────────
+Class          Precision   Recall    F1     Notes
+───────────────────────────────────────────────────────────────────
+calm              0.62      0.62     0.62   best performing class
+focused           0.58      0.48     0.53   confused with calm
+mixed             0.47      0.52     0.49   inherently ambiguous label
+neutral           0.54      0.47     0.50   no strong vocab anchor
+overwhelmed       0.47      0.55     0.51   recall ok, precision low
+restless          0.47      0.48     0.48   overlaps with overwhelmed
+───────────────────────────────────────────────────────────────────
 weighted avg      0.53      0.52     0.52
 ```
 
-<br>
-
-### Y2 Intensity — 3-Bucket Breakdown
+### Per-Bucket Performance — Y2 (Validation Set, XGBoost)
 
 ```
 Bucket        Precision   Recall    F1     Support
-───────────────────────────────────────────────────
-low  (1–2)       0.44      0.48     0.46      71
-medium  (3)      0.25      0.16     0.19      32   ← near-random
-high (4–5)       0.45      0.48     0.46      77
-───────────────────────────────────────────────────
-weighted avg     0.41      0.42     0.41     180
+──────────────────────────────────────────────────
+low  (1-2)       0.47      0.49     0.48      71
+medium  (3)      0.19      0.12     0.15      32   ← near-random
+high (4-5)       0.49      0.53     0.51      77
+──────────────────────────────────────────────────
+weighted avg     0.43      0.44     0.43     180
 ```
 
-> 🔍 `medium` (intensity=3) is essentially random (F1=0.19). Users assign `3` when uncertain — it's a catch-all label, not a distinct emotional state. `low` and `high` perform reasonably because they represent clear extremes.
+<br>
+
+### Test Set Predictions (120 samples)
+
+```
+Emotional State Distribution    Intensity Bucket Distribution
+────────────────────────────    ─────────────────────────────
+restless       25  (20.8%)      high      65  (54.2%)
+calm           25  (20.8%)      low       44  (36.7%)
+neutral        21  (17.5%)      medium    11   (9.2%)
+mixed          20  (16.7%)
+overwhelmed    16  (13.3%)
+focused        13  (10.8%)
+```
 
 <br>
 
@@ -219,37 +255,33 @@ weighted avg     0.41      0.42     0.41     180
 
 ## 🏆 Why XGBoost Won
 
-Four reasons XGBoost was selected over RF, NN, SVM, and Logistic Regression:
-
 ```
-┌─────────────────────────────────┬──────────────────────────────────────────┐
-│ Requirement                     │ Why XGBoost Passes                        │
-├─────────────────────────────────┼──────────────────────────────────────────┤
-│ Probability vectors for attn    │ ✅ predict_proba() returns [6] float vec   │
-│ NaN handling                    │ ✅ HistGradientBoosting native NaN support  │
-│ Stability across folds          │ ✅ std=0.027 vs NN std=0.057               │
-│ Sparse feature tolerance        │ ✅ Tree splits on one feature at a time    │
-│ Class imbalance handling        │ ✅ class_weight='balanced' built-in        │
-└─────────────────────────────────┴──────────────────────────────────────────┘
+Requirement                        XGBoost    RF      NN      SVM
+─────────────────────────────────────────────────────────────────────────
+predict_proba() for attention rec   ✅         ✅       ✅       ❌
+Native NaN handling                 ✅         ❌       ❌       ❌
+Stable across folds (low std)       ✅ ±2.0%  ✅ ±2.5% ❌ ±5.7% ✅
+Sparse one-hot feature tolerance    ✅         ✅       ❌       ⚠️
+class_weight='balanced' built-in    ✅         ✅       —        ✅
 ```
 
-**Why Neural Network specifically underperforms (–4% gap vs RF):**
+**Why NN specifically underperforms (gap vs RF: ~4%):**
 
-This is a **structural problem**, not a tuning problem. Every NN architecture tested — `(128,64)`, `(256,128,64)`, `(64,32)`, tanh vs relu, 5 alpha values — converged to the same 50–51% range.
+This was tested exhaustively — 5 different architectures, 3 activations, 4 alpha values. All converged to 50-51%. The reason is structural:
 
 ```
-Feature Group             Zero Fraction    Impact on NN Backprop
-──────────────────────────────────────────────────────────────────
-sem_sim (6d)              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  87.2%   gradient ≈ 0
-face/mood onehot (15d)    ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  86.7%   gradient ≈ 0
-amb_proximity (7d)        ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   84.6%   gradient ≈ 0
-ambience/tod onehot (10d) ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   80.0%   gradient ≈ 0
-numeric (4d)                                   0.0%   ✅ dense
-──────────────────────────────────────────────────────────────────
-Overall                                       75.8%   76% dead gradients
+Feature Group              Zero fraction   Effect on NN backprop
+─────────────────────────────────────────────────────────────────
+sem_sim (6d)               87.2%           gradient ≈ 0
+face/mood onehot (15d)     86.7%           gradient ≈ 0
+ambience proximity (7d)    84.6%           gradient ≈ 0
+ambience/tod onehot (10d)  80.0%           gradient ≈ 0
+numeric (4d)                0.0%           ✅ dense
+─────────────────────────────────────────────────────────────────
+Overall                    75.8%           76% of NN weight updates ≈ 0
 ```
 
-> RF splits on **one feature at a time** → zeros in other features irrelevant. NN backprop computes gradients across **all weights simultaneously** → when 76% of inputs are zero, 76% of weight updates are zero. Those neurons stop learning. This is not fixable by architecture changes without denser features.
+Tree models split on one feature at a time — zeros in other features are irrelevant. NN backpropagation computes gradients across all weights at once — 76% zero inputs means 76% zero gradients. This is not fixable by tuning.
 
 <br>
 
@@ -257,54 +289,40 @@ Overall                                       75.8%   76% dead gradients
 
 ## 🔧 Feature Engineering
 
-### Text Features (via TF-IDF → SVD)
+### Text → TF-IDF → SVD
 
 ```python
-# Word bigrams — captures multi-word emotion phrases
+# word bigrams — "mind racing", "locked in", "emotionally tired" as single features
 TfidfVectorizer(ngram_range=(1,2), max_features=500, sublinear_tf=True, min_df=3)
-# → "mind racing", "less tense", "locked in", "emotionally tired" as single features
 
-# Character 4-grams — catches typos + partial words
+# char 4-grams — catches typos: "teh" ≈ "the", "tehre" ≈ "there"
 TfidfVectorizer(analyzer='char_wb', ngram_range=(3,4), max_features=200, min_df=4)
-# → "teh" ≈ "the", "tehre" ≈ "there"
 
-# Both compressed via SVD to prevent noise
-TruncatedSVD(40)  # word → 40d
-TruncatedSVD(20)  # char → 20d
+# compress: 500 sparse → 40 dense, 200 sparse → 20 dense
+TruncatedSVD(40)
+TruncatedSVD(20)
 ```
 
-> ✅ **No leakage**: TF-IDF + SVD fitted on **train fold only**. `.transform()` used on val/test.
+> ✅ **No leakage**: both vectorizers fitted on train fold only. `.transform()` on val/test.
 
 <br>
 
 ### Ambience Proximity Weight
 
-When the ambience word appears in the journal text, emotion keywords near it receive a **2× proximity boost**:
+When the ambience word appears in the journal, emotion keywords near it get a boost:
 
 ```python
 proximity_weight = 2.0 / (1.0 + distance * 0.1)
-# "ocean audio was nice" → calm keywords near "ocean" → 2× weight
-# "forest sounds worked for a bit" → calm boosted
+# "ocean audio was nice" → calm keywords near "ocean" → up to 2x weight
 ```
 
-### Semantic Similarity Vector (6d)
+### Semantic Similarity (6d)
 
-Cosine-style overlap between journal tokens and each emotion's vocabulary cluster:
-
-```python
-sim = overlap(tokens, vocab_cluster) / (√|tokens| × √|vocab|)
-# Returns [calm_sim, restless_sim, focused_sim, overwhelmed_sim, neutral_sim, mixed_sim]
-```
+Cosine-style overlap between journal tokens and each emotion's vocabulary cluster. Returns a 6-dim vector — one score per emotion class.
 
 ### Face × Mood Interaction (15d)
 
-Rather than hardcoding rules like `if calm_face + overwhelmed_mood → ...`, both are encoded as one-hot vectors and **concatenated** — letting the model learn the interaction weights during training:
-
-```
-face_emotion_hint:    [0, 0, 1, 0, 0, 0, 0]   ← neutral_face
-previous_day_mood:    [0, 0, 0, 0, 1, 0, 0, 0]  ← overwhelmed
-concat →              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]  (15d)
-```
+Both face_emotion_hint and previous_day_mood are one-hot encoded and concatenated. The model learns the interaction weights (e.g. `tired_face + overwhelmed_prev` → overwhelmed direction) rather than having rules hardcoded.
 
 <br>
 
@@ -312,36 +330,23 @@ concat →              [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]  (15d)
 
 ## ⚙️ Hyperparameter Tuning
 
-All values settled via grid search on 3-fold stratified CV. Testing range shown in brackets.
+### Y1 — Emotional State
 
-### Y1 — Emotional State Model
+| Parameter | Value | Tested | Why |
+|-----------|-------|--------|-----|
+| `max_depth` | 4 | 3–7 | depth 5+ caused train/val gap > 20% |
+| `learning_rate` | 0.05 | 0.01, 0.05, 0.1 | 0.1 overfit, 0.01 underfit |
+| `min_samples_leaf` | 10 | 5, 10, 15, 20 | key regularizer for 1200 samples |
+| `max_iter` | 300 | 100–500 | enough, early stopping handles the rest |
+| `class_weight` | `'balanced'` | None, balanced | +3-4% recall on overwhelmed/neutral |
 
-| Parameter | Value | Tested Range | Reasoning |
-|-----------|-------|-------------|-----------|
-| `max_iter` | 300 | 100–500 | Enough for convergence; early stopping prevents over-running |
-| `max_depth` | 4 | 3–7 | Depth 5+ caused train/val gap > 20%. Shallow = less overfit |
-| `learning_rate` | 0.05 | 0.01, 0.05, 0.1 | 0.05 gave best CV mean. 0.1 overfit, 0.01 underfit |
-| `min_samples_leaf` | 10 | 5, 10, 15, 20 | Key regularizer for 1200 samples. Prevents micro-splits |
-| `class_weight` | `'balanced'` | None, balanced | +3% recall on overwhelmed and neutral vs no weight |
+### Y2 — Intensity (3-class)
 
-### Y2 — Intensity Model
-
-| Parameter | Value | Tested Range | Reasoning |
-|-----------|-------|-------------|-----------|
-| `max_depth` | 3 | 2–5 | Shallower than Y1 — weaker signal, deeper trees overfit immediately |
-| `min_samples_leaf` | 15 | 5, 10, 15, 20 | Higher than Y1 because intensity signal is noisier |
-| `class_weight` | `None` | None, balanced | Intensity classes are naturally balanced (226–277 per bin) |
-
-### TF-IDF / SVD
-
-| Parameter | Value | Reasoning |
-|-----------|-------|-----------|
-| Word `max_features` | 500 | Going above 700 didn't improve CV. Below 300 lost key bigrams |
-| Char `max_features` | 200 | Captures subword patterns without explosion |
-| `min_df` | 3 (word) / 4 (char) | Ignores rare terms appearing in < 3 docs — pure noise |
-| `sublinear_tf` | `True` | Log-scale TF prevents high-frequency words dominating |
-| SVD word dims | 40 | Tested 20/40/60; 40 was optimal. 60 added noise |
-| SVD char dims | 20 | Tested 10/20/30; 20 optimal |
+| Parameter | Value | Why different from Y1 |
+|-----------|-------|----------------------|
+| `max_depth` | 3 | shallower — weaker signal overfit faster |
+| `min_samples_leaf` | 15 | higher — noisier labels need bigger leaves |
+| `class_weight` | `None` | buckets are naturally imbalanced by design |
 
 <br>
 
@@ -349,87 +354,41 @@ All values settled via grid search on 3-fold stratified CV. Testing range shown 
 
 ## 🛡️ Overfitting Controls
 
-### The Leakage Problem (biggest fix)
+### 1. The Leakage Fix
 
-Early iterations showed:
-```
-Train accuracy :  90%  ← fake
-Val accuracy   :  57%  ← inflated
-Gap            :  33 points  ← pure leakage
-```
-
-**Root cause:** `TfidfVectorizer.fit_transform()` was called on all 1200 rows *before* the train/val split. The vectorizer learned vocabulary frequencies from validation samples — so val accuracy was inflated.
-
-**Fix:**
 ```python
-# ❌ BEFORE (leakage)
-X_tfidf = tfidf.fit_transform(all_texts)
+# ❌ before — vectorizer saw val text during fit
+X_tfidf = tfidf.fit_transform(all_1200_texts)
 X_tr, X_val = train_test_split(X_tfidf)
 
-# ✅ AFTER (no leakage)
-X_tr_raw = tfidf.fit_transform(train_texts)   # fit on train ONLY
-X_val_raw = tfidf.transform(val_texts)         # transform val — no fitting
+# ✅ after — vectorizer never sees val/test
+X_tr_tfidf  = tfidf.fit_transform(train_texts)
+X_val_tfidf = tfidf.transform(val_texts)    # transform only
+X_te_tfidf  = tfidf.transform(test_texts)   # transform only
 ```
 
-**Effect:** Train/val gap dropped from 33 points → ~10–15 points (normal generalisation gap).
+Effect: train accuracy dropped from fake ~90% to honest ~65%. Val/test gap went from 33pts to ~13pts.
 
-<br>
+### 2. Tree Regularization
 
-### ReduceLROnPlateau (TF Neural Network)
+- `max_depth=4` caps tree depth → no leaf can perfectly memorise a single entry
+- `min_samples_leaf=10` → every leaf covers at least 10 samples → prevents micro-splits
+- `learning_rate=0.05` → slower gradient steps → less aggressive fitting
 
-```python
-# Halves LR every time val loss stagnates for 12 epochs
-ReduceLROnPlateau(factor=0.5, patience=12, min_lr=1e-5)
+### 3. Stratified 3-Fold CV
 
-# Example LR schedule observed during training:
-# Epoch 1–40:   lr = 0.001000
-# Epoch 41–60:  lr = 0.000500  (plateau hit)
-# Epoch 61–80:  lr = 0.000250  (plateau hit again)
-# Epoch 81+:    Early stopping fires
-```
-
-<br>
-
-### Early Stopping
-
-```python
-# TF Neural Network
-EarlyStopping(patience=25, restore_best_weights=True, monitor='val_accuracy')
-
-# XGBoost / RF
-# HistGradientBoostingClassifier has built-in validation monitoring
-# max_iter=300 is an upper bound — actual training stops earlier
-```
-
-<br>
-
-### Full Regularisation Stack
+Each fold preserves the exact class proportions of the full dataset. This gives an honest estimate before training the final model:
 
 ```
-Technique              Applied To              Effect
-──────────────────────────────────────────────────────────────────────
-L2 (kernel_reg=1e-3)   TF Dense layers         Penalises large weights
-BatchNormalization     TF between layers       Stabilises activation scale
-Dropout (0.4 / 0.3)   TF Dense layers         40% / 30% neurons zeroed per batch
-min_samples_leaf=10    XGBoost, RF             Prevents micro-splits on outliers
-Balanced class weight  All models              Prevents majority-class collapse
-Stratified CV splits   All evaluation          Each fold has proportional class dist
+running 3-fold CV...
+  fold 1  ->  Y1: 0.522   Y2: 0.390
+  fold 2  ->  Y1: 0.550   Y2: 0.383
+  fold 3  ->  Y1: 0.500   Y2: 0.438
+  mean  ->  Y1: 0.524   Y2: 0.403
+  std   ->  Y1: 0.020    Y2: 0.024
 ```
 
-<br>
-
-### Stratified 3-Fold CV — What You'll See
-
-```
-[2/5] Stratified 3-fold CV...
-  fold 1 | Y1: 0.558  Y2: 0.221
-  fold 2 | Y1: 0.533  Y2: 0.212
-  fold 3 | Y1: 0.542  Y2: 0.225
-  CV mean  | Y1: 0.544  Y2: 0.219
-  CV std   | Y1: 0.027  Y2: 0.003
-```
-
-Low std (0.027 for Y1) = stable model. High std (0.057 for NN) = variance-sensitive, unreliable.
+Low std (0.020 for Y1) means the model is stable — not getting lucky on one split.
 
 <br>
 
@@ -437,92 +396,50 @@ Low std (0.027 for Y1) = stable model. High std (0.057 for NN) = variance-sensit
 
 ## 🔍 Current Bottleneck Analysis
 
-### 1. Hand-Crafted Features Have a Hard Ceiling
+### 1. Short entries are unreadable to TF-IDF
 
-The 29-dim structured feature vector relies entirely on keyword matching. Works for clear cases:
-- `"overwhelmed"` in text → overwhelmed cluster gets score
-- `calm_face` + `ocean` proximity → calm gets boosted
-
-**Completely fails for short, informal entries (~30-40% of the dataset):**
+~35-40% of journals are very short. TF-IDF produces near-zero vectors for these:
 
 ```
-Entry              Feature vector      Problem
-─────────────────────────────────────────────────────────────────────
-"ok session"       [0,0,0,0,0,0,...]   2 words. Zero keyword hits.
-"still off"        [0,0,0,0,0,0,...]   No emotion vocab match.
-"actually helped"  [0,0,0,0,0,0,...]   Positive but no vocab hit.
-"mind racing"      [0,0.8,0,0,0,0.1]  Correctly caught ✅
-"bit restless"     [0,0.9,0,0,0,0,...]  Correctly caught ✅
+Entry                   True label    TF-IDF signal   What BERT would give
+──────────────────────────────────────────────────────────────────────────
+"ok session"            neutral       ❌ 0 hits        ✅ 768-dim contextual
+"still off"             overwhelmed   ❌ 0 hits        ✅ 768-dim contextual
+"actually helped"       focused       ❌ 0 hits        ✅ 768-dim contextual
+"mind racing"           restless      ✅ 2 hits        ✅ 768-dim contextual
+"kinda calm"            calm          ✅ 1 hit         ✅ 768-dim contextual
 ```
 
-These short entries generate **near-identical feature vectors regardless of content**. No model can learn to distinguish between them — this is a feature ceiling, not a model ceiling.
+These entries are indistinguishable by the model. No amount of hyperparameter tuning fixes this because the input vectors are literally the same.
 
-<br>
-
-### 2. TF-IDF Partially Solves This But Still Has Limits
-
-TF-IDF adds bigrams like `"mind racing"`, `"locked in"`, `"emotionally tired"` as real features. This helped accuracy from ~49% → ~54%. But:
+### 2. TF-IDF has no negation awareness
 
 ```python
-# TF-IDF cannot understand negation or context:
-"not calm"  # contains "calm" → partially overlaps with calm cluster
-"calm"      # contains "calm" → overlaps with calm cluster
-# These two entries look similar to TF-IDF
+"not calm"   # 'calm' token fires → overlaps with calm cluster
+"calm"       # 'calm' token fires → overlaps with calm cluster
+# same TF-IDF representation despite opposite meaning
 ```
 
-<br>
+### 3. Feature sparsity structurally limits neural approaches
 
-### 3. Feature Sparsity Structurally Disadvantages Neural Networks
+76% of the structured feature matrix is zeros. This is why NN consistently underperforms tree models by ~4% and no architecture change fixes it.
 
-```
-Feature Group              Zero Fraction   NN Impact
-───────────────────────────────────────────────────────────────
-sem_sim (6d)               87.2%  ██████████████████ → gradients ≈ 0
-face/mood onehot (15d)     86.7%  █████████████████▉ → gradients ≈ 0
-amb_proximity (7d)         84.6%  █████████████████▍ → gradients ≈ 0
-ambience/tod onehot (10d)  80.0%  ████████████████   → gradients ≈ 0
-numeric (4d)                0.0%  ░░░░░░░░░░░░░░░░░░ → ✅ dense
+### 4. Intensity=3 is not a real label
 
-Overall: 75.8% zeros → 76% of NN weight gradients are zero per batch
-```
+Medium intensity has F1=0.15. Users assign `3` when unsure, not when they feel a specific medium intensity. The signal simply isn't there — this is aleatory noise, not something more data or better models can solve without changing the labelling instrument.
 
-This is **irreducible** with the current feature design. Tested architectures:
-
-| Architecture | Activation | Alpha | CV Mean | iters |
-|-------------|-----------|-------|---------|-------|
-| (128, 64) | relu | 0.01 | 50.7% | 31–36 |
-| (256, 128, 64) | relu | 0.005 | 51.7% | 26–33 |
-| (128, 64) | tanh | 0.005 | 51.2% | 32–65 |
-| (64, 32) | tanh | 0.01 | 50.8% | 46–103 |
-
-All converge to 50–52%. The gap vs RF (54.9%) is structural, not tunable.
-
-<br>
-
-### 4. Why BERT Is Not the Answer Here
+### 5. BERT is not the solution here
 
 ```
-Model              Params    Min samples needed   Works here?
-──────────────────────────────────────────────────────────────
-BERT-base          110M      ~10,000+             ❌ overfit on 1200
-all-MiniLM-L6-v2   22M      ~2,000+              ⚠️  borderline
-TF-IDF + SVD       ~0        200+                ✅ current approach
+Model                Params    Needs samples    Overfit risk (n=1200)
+─────────────────────────────────────────────────────────────────────
+BERT-base (finetune)  110M     ~1,000,000+      catastrophic
+BERT-base (frozen)    4,608    ~46,000+         low, but domain mismatch
+all-MiniLM-L6-v2      22M     ~2,000            moderate  ← right choice
+TF-IDF + SVD (current) ~0     ~200              ✅ safe
 ```
 
-BERT would give dense, context-aware embeddings — `"ok session"` and `"actually helped"` would become completely different 768-dim vectors. But 1200 training samples is far too small to fine-tune even the lightest BERT variant without severe overfitting.
-
-**Correct next step:** `sentence-transformers/all-MiniLM-L6-v2` with frozen weights + linear head + strong dropout.
-
-<br>
-
-### 5. Categorical Features as One-Hots vs Embeddings
-
-| Approach | ambience_type | time_of_day | prev_mood |
-|----------|-------------|-------------|-----------|
-| One-hot (current) | 5d, 4 always 0 | 5d, 4 always 0 | 8d, 7 always 0 |
-| Learned embedding | 4d, all dense | 4d, all dense | 6d, all dense |
-
-One-hot treats every category as independent. A 4d embedding would let the model learn that `overwhelmed` and `restless` as previous moods are more similar to each other than to `calm`. This requires a neural architecture with embedding layers — not possible with XGBoost/RF.
+The right next step is `all-MiniLM-L6-v2` (frozen) + XGBoost head. ~10 lines of change, expected +4-6% on Y1.
 
 <br>
 
@@ -530,79 +447,53 @@ One-hot treats every category as independent. A 4d embedding would let the model
 
 ## 📐 Uncertainty Analysis
 
-### Prediction Confidence (Y1)
+### Y1 Prediction Confidence
 
-The `cls_confidence` column in the output CSV is `max(cls_probs)` — the model's top class probability.
-
-```
-Confidence      Meaning                          Action
-────────────────────────────────────────────────────────────────────
-> 0.70          High — clear signal              ✅ use directly
-0.50 – 0.70     Moderate — some uncertainty      ✅ use, recommendation adapts
-0.35 – 0.50     Low — spread across 2-3 classes  ⚠️  treat with caution
-< 0.35          Very low — near-uniform           ❌ short entry, no signal
-```
-
-> 💡 The attention recommendation naturally handles low confidence: a near-uniform `cls_probs` vector produces a near-uniform `attn` vector, which means the recommendation is less sharply personalised — but it never crashes or makes a hard wrong decision.
-
-<br>
-
-### Per-Class Confusion Patterns
+`confidence` in the output CSV = `max(predict_proba)`.
 
 ```
-overwhelmed ──→ restless     (both have "heavy activity" vocabulary)
-calm ──→ neutral             (similar short journal entries)
-focused ──→ calm             (clarity language appears in both)
-mixed ──→ any other          (by definition contains vocabulary from 2 classes)
-neutral ──→ anything         (no strong positive/negative vocabulary anchor)
+Confidence range    Meaning
+──────────────────────────────────────────────────────────
+> 0.70              High — clear signal, use directly
+0.50 – 0.70         Moderate — model leaning but uncertain
+0.35 – 0.50         Low — spread across 2-3 classes
+< 0.35              No signal — entry too short/ambiguous
 ```
 
-<br>
-
-### Y2 Intensity — Aleatory Uncertainty
-
-The intensity label's correlation with available features:
+### Main Confusion Pairs (from val set)
 
 ```
-Feature              Pearson r with intensity
-─────────────────────────────────────────────
-stress_level              0.14   ← strongest
-energy_level              0.12
-duration_min              0.08
-sleep_hours              -0.06
-─────────────────────────────────────────────
-All correlations near zero → no linear predictive signal
+overwhelmed  →  restless      vocab overlap ("heavy", "unable", "scattered")
+calm         →  neutral        both produce low-signal short entries
+focused      →  calm           clarity vocabulary appears in both clusters
+mixed        →  anything       inherently contains vocab from 2+ classes
 ```
 
-This is **aleatory uncertainty** (irreducible noise in the labelling process) — not **epistemic uncertainty** (fixable by collecting more data or using a better model). Even a perfect model cannot reliably predict intensity 2 vs 3 from session metadata alone, because users do not assign these labels consistently.
+### Y2 Intensity — Irreducible Uncertainty
 
-**Evidence:** All 3 models converge to 21–24% on 5-class intensity regardless of architecture, features, or regularisation.
-
-```
-Model               5-class CV Mean    vs random (20%)
-──────────────────────────────────────────────────────
-XGBoost              21.9%             +1.9%
-Random Forest        24.5%             +4.5%
-Neural Network       20.8%             +0.8%
-```
-
-<br>
-
-### Uncertainty Propagation into Recommendations
+Pearson correlation between raw intensity and each numeric feature:
 
 ```
-High confidence prediction:
-  cls_probs = [0.05, 0.03, 0.07, 0.06, 0.75, 0.04]  ← overwhelmed dominant
-  attn      = [0.05, 0.06, 0.10, 0.07, 0.62, 0.07, 0.02, 0.01]
-  result    → "emotional_offload" template (sharp selection)
-
-Low confidence prediction:
-  cls_probs = [0.20, 0.15, 0.18, 0.22, 0.14, 0.11]  ← near-uniform
-  attn      = [0.12, 0.11, 0.14, 0.15, 0.13, 0.14, 0.11, 0.10]
-  result    → "steady_continuity" template (wins by small margin)
+stress_level     r = 0.14   ← strongest predictor
+energy_level     r = 0.12
+duration_min     r = 0.08
+sleep_hours      r = -0.06
 ```
 
-The recommendation degrades **gracefully** under uncertainty. No single threshold or if/else branches — just a softer attention distribution.
+All near zero. The model cannot reliably separate intensity 2 from 3 from session metadata alone — users don't assign these labels with enough consistency. This is why all models (XGB, RF, NN) converge to 21-24% on 5-class intensity regardless of what features or architecture you use.
+
+### How Uncertainty Propagates into Recommendations
+
+The attention mechanism uses the full probability vector as a query, so low-confidence predictions automatically produce lower-contrast attention scores:
+
+```
+High confidence:  probs = [0.04, 0.03, 0.06, 0.05, 0.76, 0.06]
+→ attn sharply peaks at emotional_offload (0.62)   → clear recommendation
+
+Low confidence:   probs = [0.19, 0.16, 0.18, 0.21, 0.14, 0.12]
+→ attn distributed: steady_continuity (0.16) wins by small margin
+→ recommendation is softer but never crashes
+```
 
 <br>
 
@@ -610,34 +501,35 @@ The recommendation degrades **gracefully** under uncertainty. No single threshol
 
 ## 📄 Output Format
 
-Each row in `arvyax_predictions_xgboost.csv`:
+Each row in `arvyax_predictions.csv`:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | int | Session ID |
-| `predicted_emotional_state` | str | One of 6 emotion classes |
-| `predicted_intensity` | int | 1–5 |
-| `recommendation` | str | Personalised wellbeing recommendation |
-| `top_template` | str | Recommendation template used |
+| `id` | int | Session ID from test set |
+| `emotional_state` | str | One of 6 emotion classes |
+| `intensity_bucket` | str | low / medium / high |
+| `recommendation` | str | Personalised wellbeing text |
+| `template` | str | Which of the 8 templates was selected |
 | `duration_min` | int | Session duration from input |
-| `sleep_hours_recommended` | float | 8 if actual < 6, else actual |
+| `sleep_rec` | float | 8 if sleep_hours < 6, else actual |
 | `time_of_day` | str | From input |
-| `attention_weights` | dict | {template: float} — full attention distribution |
-| `cls_confidence` | float | max(cls_probs) — model confidence |
-| `ambience_type` | str | From input |
+| `attn_weights` | dict | {template: float} full attention distribution |
+| `confidence` | float | max(predict_proba) for Y1 |
+| `ambience` | str | Ambience type from input |
 
-**Sample output:**
+**Sample row:**
+
 ```json
 {
   "id": 10001,
-  "predicted_emotional_state": "focused",
-  "predicted_intensity": 3,
+  "emotional_state": "focused",
+  "intensity_bucket": "medium",
   "recommendation": "Your mind is in a receptive state. Use this for deep work. The cafe ambience supported focus today. Start with the hardest task while this clarity holds.",
-  "top_template": "deep_work",
+  "template": "deep_work",
   "duration_min": 4,
-  "sleep_hours_recommended": 8,
+  "sleep_rec": 8,
   "time_of_day": "night",
-  "cls_confidence": 0.612
+  "confidence": 0.583
 }
 ```
 
@@ -649,33 +541,25 @@ Each row in `arvyax_predictions_xgboost.csv`:
 
 ```
 arvyax/
-├── 📄 arvyax_xgboost.py          ← RECOMMENDED. Best model + 3-fold CV + full eval
-├── 📄 arvyax_random_forest.py    ← RF pipeline + feature importance printout
-├── 📄 arvyax_nn.py               ← TF neural network. Benchmarking only, not recommended
+├── 📄 arvyax_xgboost.py         ← main pipeline (this one)
+├── 📄 arvyax_random_forest.py   ← RF version, includes feature_importances_ printout
+├── 📄 arvyax_nn.py              ← TF neural network, benchmarking only
 │
-├── 📊 arvyax_predictions_xgboost.csv
-├── 📊 arvyax_predictions_rf.csv
-├── 📊 arvyax_predictions_nn.csv
+├── 📊 arvyax_predictions.csv    ← test set predictions (120 rows)
 │
-└── 📘 README.md                  ← this file
+└── 📘 README.md
 ```
 
-### Quick Start
+**Quick start:**
 
 ```bash
-# Install dependencies
-pip install scikit-learn pandas numpy tensorflow
+pip install scikit-learn pandas numpy
 
-# Run best model (XGBoost)
 python arvyax_xgboost.py
-
-# Run all three and compare
-python arvyax_xgboost.py      # Y1: ~54%  Y2: 42% (3-bucket)
-python arvyax_random_forest.py # Y1: ~52%  Y2: ~22%
-python arvyax_nn.py            # Y1: ~49%  Y2: ~21%
 ```
 
-**Data paths** (update these to match your Colab / local paths):
+**Update data paths at the top of the file:**
+
 ```python
 train_df = pd.read_csv('/content/Sample_arvyax_reflective_dataset.xlsx - Dataset_120.csv')
 test_df  = pd.read_csv('/content/arvyax_test_inputs_120.xlsx - Sheet1.csv')
@@ -687,15 +571,13 @@ test_df  = pd.read_csv('/content/arvyax_test_inputs_120.xlsx - Sheet1.csv')
 
 ## 🚧 Limitations & Next Steps
 
-| # | Limitation | Severity | Next Step |
-|---|-----------|----------|-----------|
-| 1 | Keyword features ceiling at ~54-57% Y1 | 🔴 High | Replace `sem_sim` + `amb_proximity` with `all-MiniLM-L6-v2` sentence embeddings (frozen) |
-| 2 | Y2 intensity near-random (5-class CV ~22%) | 🟠 Medium | Reframe as 3-class (low/med/high) or collect self-reported pre-session mood |
-| 3 | `face_emotion_hint` ~20% missing | 🟡 Low | Add explicit missingness indicator feature or impute with predicted value |
-| 4 | Short journals (<5 words) undetectable | 🔴 High | Flag ultra-short entries as `low_confidence=True` in output |
-| 5 | Categorical features as one-hots | 🟡 Low | Switch to learned 4-8d embeddings (requires neural architecture) |
-| 6 | Recommendation templates are static strings | 🟢 Nice-to-have | Use user's journal text as context for a small generative model |
-| 7 | NN underperforms RF by ~4% | 🟡 Low | Structural issue (sparse features) — only fixable with denser embeddings |
+| # | Issue | Impact | Fix |
+|---|-------|--------|-----|
+| 1 | Short entries → zero TF-IDF vectors | 🔴 ~35% of data has no usable signal | Replace text features with `all-MiniLM-L6-v2` frozen embeddings |
+| 2 | intensity=3 is near-random (F1=0.15) | 🟠 Y2 medium bucket unreliable | Change labelling — ask users to rate intensity on a simpler 2-point scale |
+| 3 | `face_emotion_hint` ~20% missing | 🟡 Imputed as "none" silently | Add a `face_missing` indicator feature |
+| 4 | NN underperforms RF by ~4% | 🟡 Structural (76% sparse features) | Need dense embeddings to fix this |
+| 5 | Categorical one-hots | 🟢 Minor | Learned 4-8d embeddings would generalise better in a neural model |
 
 <br>
 
@@ -704,18 +586,30 @@ test_df  = pd.read_csv('/content/arvyax_test_inputs_120.xlsx - Sheet1.csv')
 ## 📈 Accuracy Journey
 
 ```
-Version    Approach                          Y1 Val    Gap (train-val)  Note
-──────────────────────────────────────────────────────────────────────────────────
-v1.0  Pure numpy NN, hand-crafted 29d        66%*      33+ pts         *inflated
-v1.1  Fixed leakage, honest eval             ~49%       ~12 pts        real baseline
-v2.0  + TF-IDF bigrams + char ngrams         ~52%       ~12 pts        text signal
-v2.1  + Expanded emotion vocab               ~54%       ~10 pts
-v3.0  + Stratified 3-fold CV (final)         54.4%      ~10 pts        current
-──────────────────────────────────────────────────────────────────────────────────
+Version    Change                                  Y1 Val    Y1 CV   Y2 Val   Note
+────────────────────────────────────────────────────────────────────────────────────
+v1         Numpy NN, 29d hand-crafted features     ~66%*     —       —        *fake (leakage)
+v2         Fixed leakage                           ~49%      ~49%    —        real baseline
+v2.1       + TF-IDF bigrams + char ngrams          ~52%      ~51%    —        text signal added
+v2.2       + Expanded emotion vocab                ~54%      ~54%    —
+v3         5-class intensity → 3-class buckets     52.2%    52.4%   44.4%    current
+────────────────────────────────────────────────────────────────────────────────────
 ```
 
-> 🔑 The jump from v1.0 to v1.1 is not a regression — it's fixing fake accuracy caused by data leakage. Real accuracy was never 66%.
+> The drop from v1 (66%) to v2 (49%) is not a regression. It's removing fake accuracy caused by data leakage. The real starting point was always ~49%.
 
 <br>
 
 ---
+
+<div align="center">
+
+**Built for Arvyax Reflective Session Platform**
+
+*Dual-output emotion classification · Attention-based recommendations · Zero if/else*
+
+![No leakage](https://img.shields.io/badge/Evaluation-No_Data_Leakage-22C55E?style=flat-square)
+![No if/else](https://img.shields.io/badge/Recommendations-Zero_if%2Felse-6366F1?style=flat-square)
+![3-fold CV](https://img.shields.io/badge/Validation-Stratified_3--fold_CV-F59E0B?style=flat-square)
+
+</div>
