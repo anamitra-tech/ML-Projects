@@ -197,7 +197,7 @@ Random baseline           16.7%      —       —
 Model                    CV Mean   CV Std   Val Acc
 ──────────────────────────────────────────────────────
 XGBoost (HGB) ✅          40.3%    ±2.4%    44.4%
-Random Forest             ~38%     ±2.1%    ~39%
+Random Forest             ~38%     ±2.1%    ~49%
 Neural Network (TF)       ~34%     ±3.1%    ~35%
 ──────────────────────────────────────────────────────
 Random baseline           33.3%      —       —
@@ -326,8 +326,8 @@ lower alpha (less L2)       ~51%   (regularisation irrelevant)
 higher learning rate        ~50%   (no gradient = nothing to amplify)
 BatchNormalization          ~52%   (normalises activations, not inputs)
 ──────────────────────────────────────────────────────────────────
-RF baseline                  54.9% (no gradient at all, immune)
-XGBoost baseline             52.4% (same, immune)
+RF baseline                  84.9% (but it was overfitting as the val acc was 50)
+XGBoost baseline             52.4% (same, immune, here val acc was 52)
 ```
 
 The only real fix is **denser input features**. Replace the one-hot structured features with learned embeddings, and replace TF-IDF vectors with sentence transformer embeddings (`all-MiniLM-L6-v2`). Dense inputs → nonzero gradients everywhere → NN starts learning properly. This is the planned next step.
