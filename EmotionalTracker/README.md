@@ -265,23 +265,84 @@ Sparse one-hot feature tolerance    ✅         ✅       ❌       ⚠️
 class_weight='balanced' built-in    ✅         ✅       —        ✅
 ```
 
-**Why NN specifically underperforms (gap vs RF: ~4%):**
+**Why NN specifically underperforms (gap vs RF: ~4%) — the sparse gradient problem:**
 
-This was tested exhaustively — 5 different architectures, 3 activations, 4 alpha values. All converged to 50-51%. The reason is structural:
+This was tested exhaustively — 5 different architectures, 3 activations, 4 alpha values. All converged to 50-51%. The reason is structural and cannot be fixed by tuning.
+
+> **Quick clarification on the term:** This is often called "vanishing gradients" but that's a different (and less severe) problem. Vanishing gradients means the gradient *shrinks* exponentially through deep layers — it's small but still exists. What happens here is worse: the gradient is **exactly zero** for 76% of weights. Not small. Zero. The weight never receives any learning signal at all.
+
+#### The exact mechanism
+
+The weight gradient formula in backpropagation is:
 
 ```
-Feature Group              Zero fraction   Effect on NN backprop
-─────────────────────────────────────────────────────────────────
-sem_sim (6d)               87.2%           gradient ≈ 0
-face/mood onehot (15d)     86.7%           gradient ≈ 0
-ambience proximity (7d)    84.6%           gradient ≈ 0
-ambience/tod onehot (10d)  80.0%           gradient ≈ 0
-numeric (4d)                0.0%           ✅ dense
-─────────────────────────────────────────────────────────────────
-Overall                    75.8%           76% of NN weight updates ≈ 0
+dL/dW[i,j] = x[i] × δ[j]
+
+where x[i] = input feature i
+      δ[j] = upstream gradient flowing back through neuron j
 ```
 
-Tree models split on one feature at a time — zeros in other features are irrelevant. NN backpropagation computes gradients across all weights at once — 76% zero inputs means 76% zero gradients. This is not fixable by tuning.
+When `x[i] = 0` (i.e. that input feature is zero), the entire row `i` of the gradient matrix becomes zero — regardless of how large `δ[j]` is. The weight `W[i,j]` receives **no update**, no matter how many epochs you train, how high the learning rate is, or which optimiser you use. It stays at its random initialisation value forever.
+
+This compounds with ReLU: if a neuron's pre-activation output `z[j] < 0`, its gradient is also zero, zeroing out the entire column `j`. So the two effects multiply:
+
+```
+Effect 1 — input sparsity:     76.4% of input dims = 0
+  → dL/dW[i,j] = x[i] × δ = 0 for 76% of weight rows
+  → those rows never update
+
+Effect 2 — ReLU dead neurons:  42.2% of neurons output 0 after ReLU
+  → dL/dW[i,j] = x[i] × 0  = 0 for 42% of weight columns
+  → those columns never update
+
+Combined result:  86.3% of ALL weights receive exactly zero gradient per step
+                  Only 13.7% of weights actually learn anything per iteration
+```
+
+Switching to `tanh` instead of ReLU doesn't fix it — tanh gradient is `(1 - tanh²(z))` which is nonzero everywhere, but `x[i] = 0` still zeros the entire row. The input sparsity dominates.
+
+#### Why tree models don't have this problem
+
+A decision tree evaluates one feature at a time:
+
+```
+if feature_42 > 0.3:          ← only feature_42 matters here
+    go left                   ← features 0-41 and 43-109 are irrelevant
+```
+
+Zero values in other features don't interfere with the split on feature 42. Each tree node only needs *one* informative feature to be nonzero. With 76% sparsity, the chance that at least one feature in a node is nonzero is very high — trees find signal efficiently.
+
+NN backprop needs *all* connected weights to carry gradient simultaneously. With 76% inputs zeroed, most of the weight matrix is invisible to the optimiser.
+
+#### Why this is not fixable without changing the features
+
+```
+Attempted fix               Result
+──────────────────────────────────────────────────────────────────
+tanh instead of relu        ~51% (input sparsity still dominates)
+larger network (256,128,64) ~51.7% (more dead weights, same problem)
+smaller network (64,32)     ~50.8% (less capacity, same problem)
+lower alpha (less L2)       ~51%   (regularisation irrelevant)
+higher learning rate        ~50%   (no gradient = nothing to amplify)
+BatchNormalization          ~52%   (normalises activations, not inputs)
+──────────────────────────────────────────────────────────────────
+RF baseline                  54.9% (no gradient at all, immune)
+XGBoost baseline             52.4% (same, immune)
+```
+
+The only real fix is **denser input features**. Replace the one-hot structured features with learned embeddings, and replace TF-IDF vectors with sentence transformer embeddings (`all-MiniLM-L6-v2`). Dense inputs → nonzero gradients everywhere → NN starts learning properly. This is the planned next step.
+
+```
+Feature Group              Zero fraction   Effect on backprop
+─────────────────────────────────────────────────────────────
+sem_sim (6d)               87.2%           row gradient = 0
+face/mood onehot (15d)     86.7%           row gradient = 0
+ambience proximity (7d)    84.6%           row gradient = 0
+ambience/tod onehot (10d)  80.0%           row gradient = 0
+numeric (4d)                0.0%           ✅ learns normally
+─────────────────────────────────────────────────────────────
+Overall                    75.8%           86.3% of weights frozen at init
+```
 
 <br>
 
