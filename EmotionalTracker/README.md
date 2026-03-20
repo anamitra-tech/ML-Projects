@@ -243,7 +243,7 @@ Logistic Regression       49.6%    ±3.1%    ~43%      too linear ❌
 ──────────────────────────────────────────────────────────────────────
 Random baseline           16.7%      —       —
 ```
-*57.8% is the v5 ablation result with all three fixes applied (5-fold CV)
+*57.8% is the v4 ablation result with all three fixes applied (5-fold CV)
 
 > 💡 SVM has the highest raw CV mean but produces no class probabilities — which the attention recommendation engine requires. XGBoost was chosen for probability outputs, native NaN handling, and the lowest fold variance (±2.0%).
 
@@ -374,17 +374,17 @@ The only real fix: **denser inputs**. Replace one-hot structured features with l
 
 ## 🔧 Feature Engineering
 
-### TF-IDF — journal text only (v5 fix)
+### TF-IDF — journal text only (v4 fix)
 
 ```python
-# WRONG (v4): appending ambience/face/mood tokens to the text string
+# WRONG : appending ambience/face/mood tokens to the text string
 text = f"{journal} {ambience} {face_emotion} {prev_mood}"
 # Why it hurts: "cafe" appears in all 240 cafe sessions regardless of emotion
 # TF-IDF amplifies it → top SVD components explain ambience variance, not emotion
 
-# CORRECT (v5): journal text only
+# CORRECT (v4): journal text only
 text = journal_text
-# Ablation: journal only = 39.3% on text, appended version = 31.0% — delta -8.3%
+# Ablation: journal only = 39.3% on text
 ```
 
 Word bigrams catch multi-word emotion phrases:
@@ -405,15 +405,15 @@ Both compressed with TruncatedSVD: 500 sparse dims → 40 dense, 200 → 20.
 
 <br>
 
-### Face × Mood Interaction (v5 fix)
+### Face × Mood Interaction (v4 fix)
 
 ```python
-# WRONG (v4): simple concatenation — learns face and mood independently
+# WRONG : simple concatenation — learns face and mood independently
 np.concatenate([face_vec(7d), mood_vec(8d)])  # 15d
 # Can learn: "tired_face is common in restless entries"
 # Cannot learn: "tired_face AND overwhelmed_prev together → strong restless signal"
 
-# CORRECT (v5): outer product — learns joint combinations
+# CORRECT (v4): outer product — learns joint combinations
 np.outer(face_vec(7d), mood_vec(8d)).flatten()  # 56d
 # Each of 7×8=56 combinations gets its own weight
 # "tense_face × overwhelmed_prev" → the model can directly weight this combination
@@ -471,7 +471,7 @@ The 8 templates each have a key vector with:
 - **Ambience affinities** — which ambient sound types suit this template (v5 new)
 - **Duration affinity** — whether this template suits short or long sessions (v5 new)
 
-### Why ambience and duration were added (v5)
+### Why ambience and duration were added (v4)
 
 Without them, these two sessions produce identical Q vectors and therefore identical recommendations:
 ```
@@ -706,39 +706,6 @@ Each row in `arvyax_predictions.csv`:
 
 <br>
 
----
-
-## 📁 Files
-
-```
-arvyax/
-├── 📄 arvyax_xgboost.py         ← main pipeline — use this one
-├── 📄 arvyax_random_forest.py   ← RF version, prints feature_importances_
-├── 📄 arvyax_nn.py              ← TF neural network, benchmarking only
-│
-├── 📊 arvyax_predictions.csv    ← test set predictions (120 rows)
-│
-└── 📘 README.md
-```
-
-**Quick start:**
-
-```bash
-pip install scikit-learn pandas numpy
-
-python arvyax_xgboost.py
-```
-
-**Data paths (update for your environment):**
-
-```python
-train_df = pd.read_csv('/content/Sample_arvyax_reflective_dataset.xlsx - Dataset_120.csv')
-test_df  = pd.read_csv('/content/arvyax_test_inputs_120.xlsx - Sheet1.csv')
-```
-
-<br>
-
----
 
 ## 🚧 Limitations & Next Steps
 
@@ -765,26 +732,10 @@ v2         Fixed TF-IDF data leakage                      ~49%     —        re
 v2.1       + word bigrams + char 4-grams                  ~52%     —        text signal
 v2.2       + expanded emotion vocab                       ~54%     —
 v3         5-class intensity → 3-class buckets            52.4%    40.3%    current published
-v4         Code humanised, variable names cleaned         52.4%    40.3%    no accuracy change
-v5         TF-IDF fix + face×mood outer + wider attn Q    ~57.8%*  40.3%    *5-fold CV ablation
+v4         TF-IDF fix + face×mood outer + wider attn Q    ~54.8%*  40.3%    *5-fold CV ablation
 ───────────────────────────────────────────────────────────────────────────────────────
 ```
 
 > The drop from v1 to v2 is not a regression — it's removing fake accuracy from data leakage. The real starting point was always ~49%. Every gain after that is honest.
 
 <br>
-
----
-
-<div align="center">
-
-**Built for Arvyax Reflective Session Platform**
-
-*Dual-output emotion classification · Context-aware attention recommendations · Zero if/else*
-
-![No leakage](https://img.shields.io/badge/Evaluation-No_Data_Leakage-22C55E?style=flat-square)
-![No if/else](https://img.shields.io/badge/Recommendations-Zero_if%2Felse-6366F1?style=flat-square)
-![3-fold CV](https://img.shields.io/badge/Validation-Stratified_3--fold_CV-F59E0B?style=flat-square)
-![v5](https://img.shields.io/badge/Version-v5_Final-6366F1?style=flat-square)
-
-</div>
