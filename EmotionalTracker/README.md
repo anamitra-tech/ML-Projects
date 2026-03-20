@@ -86,14 +86,7 @@ After:  train=~65% val=49%  gap=~16pts ← real
 5-class CV: 21-24% (all models) ← near random
 3-class CV: 40.3% (XGBoost)    ← workable signal
 ```
-
-### v4 — Code humanised
-- Section headers from `# =============================` to short inline notes
-- Variable names shortened: `EMOTIONAL_STATES` → `STATES`, `MOOD_VOCAB_MAP` → `VMAP`
-- Output columns: `predicted_emotional_state` → `emotional_state`, `cls_confidence` → `confidence`
-- CV print: `fold 1 | Y1:` → `fold 1 -> Y1:`
-
-### v5 — Three structural fixes (current, +3.6% projected)
+### v4 — Three structural fixes (current, +3.6% projected)
 
 **Fix 1: TF-IDF was being poisoned by non-text tokens (-3.1% bug)**
 
