@@ -1,4 +1,4 @@
-# 🧘 ARVYAX — Reflective Session ML Pipeline
+# 🧘 Emotional tracker
 
 > **Dual-output classification pipeline** that predicts emotional state + session intensity from mindfulness journal entries, face emotion signals, and ambient session metadata — then generates a personalised recommendation using a pure attention mechanism (zero if/else).
 
