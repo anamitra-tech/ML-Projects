@@ -38,7 +38,17 @@ def train(model, dataloader, epochs=3):
             loss.backward()
             optimizer.step()
 
+#pruning happens globally across the network, not layer by layer
+#Because not all layers are equally important.
 
+#Example:
+
+#Sometimes:
+
+#Layer 1 might contain many weak weights
+#Layer 2 might contain mostly strong weights
+
+#Layer-wise pruning forces both to lose weights equally.
 def prune_by_magnitude(model, prune_percent):
     all_weights = []
 
