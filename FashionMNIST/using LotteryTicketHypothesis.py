@@ -73,6 +73,41 @@ def reset_to_initial(model, initial_weights, mask):
     for p in model.parameters():
         p.data = initial_weights[i] * mask[i]
         i += 1
+#Suppose the model starts like this:
+
+#Layer weights:
+
+#fc1 weights = [0.4, -0.2, 0.8]
+#fc2 weights = [0.1, 0.5, -0.3]
+
+#After this line:
+
+#initial_weights =
+#[
+ #[0.4, -0.2, 0.8],
+ #[0.1, 0.5, -0.3]
+#]
+
+#These values never change.
+#Step 2 — Training changes the model weights
+
+#After training:
+
+#fc1 weights = [1.2, -0.01, 0.9]
+#fc2 weights = [0.7, 0.3, -0.6]
+
+#So now:
+
+#model weights ≠ initial_weights
+
+#They are different.
+
+#Step 3 — Pruning removes weak connections
+
+#After pruning:
+
+#fc1 weights = [1.2, 0, 0.9]
+#fc2 weights = [0.7, 0.3, 0]
 
 
 # ---- LTH Algorithm ----
