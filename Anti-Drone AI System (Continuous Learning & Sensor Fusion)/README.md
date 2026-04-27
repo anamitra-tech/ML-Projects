@@ -1,5 +1,5 @@
 # AegisDrone 🛡️
-## AI-Based Drone Threat Detection & Classification System
+## Anti-Drone AI System (Continuous Learning & Sensor Fusion)
 
 > **Version:** v28 · Continuous Learning / Memory-First Architecture  
 > **Notebook:** `AegisDrone_Final4.ipynb`  
