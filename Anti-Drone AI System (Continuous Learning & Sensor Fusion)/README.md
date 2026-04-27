@@ -460,41 +460,4 @@ print(decision["label"], decision["soft_score"])
 # e.g. → FRIENDLY_DRONE  0.8234
 ```
 
----
 
-## 11. Versioning & Pillar History
-
-| Version | Key Additions |
-|---------|--------------|
-| v24 | Base RF feature extraction, Random Forest |
-| v25 | GBT, Logistic Regression, temperature scaling |
-| v26 | Mixup, SMOTE, hard-negative mining [A1–A3] |
-| v27 | Deep SVDD [P1], Hysteresis [P2], Trust-gated bypass [P3], Production mode [P4] |
-| **v28** | **Memory-First pipeline [M1], Autonomous promotion [M2], Drone Safety Quadrant [M3], Professional stress-tests [M4], Readiness Scorecard [M5], FIX-1 (KeyError bayesian), FIX-2 (SVDD gradient explosion)** |
-
----
-
-## Citation
-
-If you use AegisDrone or the DroneRF benchmark in your work, please cite:
-
-```bibtex
-@dataset{dronerf2019,
-  title  = {DroneRF Dataset: A Dataset of Drones for RF-based Detection,
-             Classification and Identification},
-  author = {Al-Sa'd, Mohammad and Al-Ali, Abdulla and Mohamed, Amr and
-            Khattab, Tamer and Erbad, Aiman},
-  year   = {2019},
-  publisher = {IEEE DataPort}
-}
-```
-
----
-
-## License
-
-This project is for **research and educational purposes**. DroneRF dataset usage is subject to its [original license](https://ieee-dataport.org/open-access/dronerf). The AegisDrone codebase is MIT-licensed.
-
----
-
-*AegisDrone v28 · Research prototype · Not for operational deployment without SVDD fix and real-world validation*
