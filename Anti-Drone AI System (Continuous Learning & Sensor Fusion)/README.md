@@ -4,6 +4,7 @@
 > **Version:** v28 · Continuous Learning / Memory-First Architecture  
 > **Notebook:** `AegisDrone_Final4.ipynb`  
 > **Dataset:** [DroneRF](https://www.kaggle.com/datasets/maturk/dronerf) — Real-world IQ RF captures (Parrot Bebop, AR Drone 2, DJI Phantom 3)
+>![AegisDrone HUD Demo](aegis_drone.gif)
 
 ---
 
