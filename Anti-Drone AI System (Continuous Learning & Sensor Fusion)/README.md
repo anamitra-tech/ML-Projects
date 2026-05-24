@@ -4,7 +4,9 @@
 > **🎉 ALL 6 PRODUCTION GATES PASSED — v31 IS FIELD-READY FOR DEPLOYMENT**
 >
 > `Recall 92%` · `FA 0.1%` · `Open-Set 6.0%` · `Flicker 0.521` · `p95 Latency 52.8ms` · `37/38 self-tests green`
-> ![Project Demo](assets/aegis_drone.gif)
+<p align="center">
+  <img src="aegis_drone.gif" width="900">
+</p>
 
 ---
 
