@@ -171,7 +171,186 @@ DroneShield (Australia): ₹5-12 crore per site, requires retraining for every n
 
 AegisDrone is an indigenous, sovereign, self-learning system at one-tenth the cost.
 
-One Line Summary
+
+The Dataset Story — What's Really Happening
+First, The Honest Truth
+The notebook is designed to work with a real public dataset called DroneRF — but when that dataset is not available (which is the case when running on a fresh machine), it automatically generates synthetic (fake but realistic) data and uses that instead.
+So there are actually two modes this system runs in.
+
+Mode 1: Real Data — The DroneRF Dataset
+What is DroneRF?
+DroneRF is a publicly available academic dataset created by researchers and hosted on IEEE DataPort. It contains actual RF signal recordings captured from real drones flying in real environments.
+Think of it like this — researchers took real drones, flew them, pointed a radio antenna at them, and recorded exactly what radio signals they emit. Like recording actual heartbeats of different people.
+What Drones Are Recorded In It?
+DroneRF contains recordings of:
+
+├── Background RF          (no drone — just ambient radio noise)
+├── AR Drone               (Parrot AR Drone 2.0)
+├── Bebop Drone            (Parrot Bebop)
+└── Phantom Drone          (DJI Phantom)
+What Does the Raw Data Look Like?
+Each file is a CSV file containing raw IQ samples — basically a long list of numbers representing the radio wave captured by the antenna.
+Raw signal looks like:
+0.0023, -0.0041, 0.0187, -0.0092, 0.0341, ...
+(thousands of numbers per file)
+These numbers mean nothing on their own. That's why the system processes them into 83 meaningful features — like converting a raw heartbeat waveform into "heart rate: 72 bpm, rhythm: regular, strength: normal."
+How the System Reads It
+pythonWINDOW_SIZE = 8192    # takes 8192 samples at a time
+STEP_SIZE   = 4096    # moves forward 4096 samples and takes next window
+                      # (50% overlap — like reading with a sliding magnifying glass)
+So from one long recording file of say 100,000 samples, the system creates:
+
+Window 1: samples 0 to 8192
+Window 2: samples 4096 to 12288
+Window 3: samples 8192 to 16384
+...and so on
+
+Each window becomes one training example after feature extraction.
+Where This Dataset Lives
+pythonDATA_DIR = "/content/drive/MyDrive/DroneRF/DroneRF"
+It's stored on Google Drive and accessed via Google Colab. The researcher downloads it from IEEE DataPort and uploads it to their Drive.
+
+Mode 2: Synthetic Data — When Real Data is Unavailable
+What is Synthetic Data Here?
+When the DroneRF folder is not found, the system calls generate_realistic_dataset() which creates mathematically realistic fake signals based on known statistical properties of each drone type.
+Think of it like this — instead of recording a real heartbeat, a doctor describes from medical knowledge: "A healthy adult heart beats 60-100 times per minute, with these pressure values, this rhythm pattern..." and you simulate a heartbeat from that description.
+How Does It Know What to Simulate?
+The code contains a lookup table called DRONERF_STATS which stores the real statistical properties of each drone type measured from actual research:
+Background RF:
+  Signal Power:     around -28 dBm  (very weak)
+  Spectral Entropy: around 3.8      (simple, not complex)
+  Bandwidth:        around 0.7 MHz  (narrow)
+  Energy in Band 1: around 40%      (mostly low frequency)
+
+AR Drone:
+  Signal Power:     around -18 dBm  (stronger)
+  Spectral Entropy: around 5.6      (more complex)
+  Bandwidth:        around 2.2 MHz  (wider)
+  Energy in Band 3: around 35%      (pushes into higher frequencies)
+
+Phantom Drone:
+  Signal Power:     around -12 dBm  (strongest)
+  Spectral Entropy: around 6.3      (most complex)
+  Bandwidth:        around 3.9 MHz  (widest)
+  Energy in Band 4: around 48%      (high frequency dominant)
+These values come from published academic research on drone RF signatures — so while the data is synthetic, it is grounded in real measured physics.
+What Does the Synthetic Dataset Look Like?
+Total samples generated: ~7,400 rows
+
+Per class:
+├── Background RF    → 2,000 base samples
+│     ├── 1,500 normal noise level
+│     ├──   300 slightly noisy
+│     └──   200 very noisy
+├── AR Drone         → 2,000 base samples + 500 boundary cases
+└── Phantom Drone    → 2,000 base samples + 500 boundary cases
+
+Each row = 83 feature columns + label
+The "boundary cases" are intentionally ambiguous samples — like creating exam questions that are on the border between two answers — so the AI learns to handle difficult edge cases.
+
+How is Data Split for Training and Testing?
+The Simple Answer
+Total Data
+    │
+    ├── 80% → Training Data    (AI learns from this)
+    │
+    └── 20% → Test Data        (AI is evaluated on this — never seen during training)
+The More Detailed Answer
+The system actually makes three splits:
+Total Data (say 7,000 samples)
+    │
+    ├── 80% Training Pool (5,600 samples)
+    │       │
+    │       ├── 85% Actual Training  (4,760 samples)
+    │       │     → AI models learn from this
+    │       │
+    │       └── 15% Validation       (840 samples)
+    │             → Used to calibrate thresholds
+    │             → Used to set "how confident must the AI be 
+    │               before calling something a threat"
+    │
+    └── 20% Test Set (1,400 samples)
+          → Completely untouched during all training
+          → Final exam — AI sees these for the first time
+          → Results here are what gets reported
+Why Three Splits?
+Think of it like preparing students for a board exam:
+
+Training set = the textbook and practice problems the student studies
+Validation set = mock exams used to tune how the teacher grades
+Test set = the actual board exam the student has never seen
+
+If you use the exam paper for practice, the student's score is meaningless. Same here — the test set is locked away until final evaluation.
+
+What Happens to Training Data Before Training?
+The raw training data goes through three enrichment steps before any AI model sees it.
+Step 1: Mixup Augmentation
+Imagine blending two photos — 70% photo of a dog, 30% photo of a cat. You get a slightly dog-like, slightly cat-like image. The AI learns that the space between classes also needs to be understood.
+pythonMIXUP_ALPHA = 0.30   # 30% background mixed into drone signal
+MIXUP_N_PER_CLASS = 800  # creates 800 such mixed examples per drone class
+This adds 1,600 new artificial training examples that help the AI handle the real-world situation where a drone is flying near interference.
+Step 2: Hard Negative Mining
+After the first round of training, the system finds the examples the AI got most wrong — the ones it was most confused about — and adds jittered (slightly varied) copies of those back into training.
+Like a teacher identifying the questions a student keeps getting wrong and drilling those specifically.
+pythonHARD_NEG_PERCENTILE = 20   # bottom 20% most-confused examples get recycled
+HARD_NEG_JITTER = 0.08     # slight random variation added so it's not just memorising
+Step 3: SMOTE Balancing
+If one class has fewer examples than others, the AI naturally ignores it. SMOTE creates synthetic in-between examples of the minority class to balance everything out.
+Like photocopying rare exam questions so students practice them as much as common ones.
+
+What Are the Five AI Models Trained On?
+Each of the five models gets a different view of the same data — like five specialists each reviewing different test results of the same patient:
+ModelWhat Features It SeesWhyLGB-RF (Random Forest)Top 45 most informative featuresBroad overview — sees the most relevant signalsLGB-GBT (Gradient Boosting)Top 40 most variable featuresFocuses on what changes most between classesLogistic RegressionAll 83 featuresSimple linear relationships across everything1D CNN (Neural Network)All 83 featuresLearns non-linear patterns humans can't describeGBP (Bayesian model)All 83 featuresGives probability estimates with uncertainty
+The feature selection (which 45 out of 83 to give the Random Forest) is done automatically using Mutual Information — a mathematical measure of "how much does knowing this feature tell me about which class this is?"
+
+Training vs Test Performance — What Gets Measured
+On the test set (data the AI has never seen), the system measures:
+Drone Detection Recall:   target ≥ 85%
+  → Of all real threat drones, what % did we catch?
+
+False Alarm Rate:          target ≤ 10%
+  → Of all safe signals, what % did we wrongly flag as threat?
+
+Hold Fraction:             target ≤ 20%
+  → What % of signals did the AI say "not sure yet"?
+
+Flicker Index:             target < 0.65
+  → How often does the AI flip its decision back and forth?
+
+Open-Set Fraction:         target ≥ 4%
+  → What % of signals did we correctly flag as unknown/novel?
+All five must pass for the system to be declared production ready.
+
+The Complete Data Flow in One Picture
+Real DroneRF CSVs          OR        Synthetic Data
+(raw IQ samples)                     (from DRONERF_STATS)
+        │                                    │
+        └──────────────┬─────────────────────┘
+                       │
+              Feature Extraction
+              (83 features per window)
+                       │
+              ┌────────┴────────┐
+              │                 │
+           80% Train          20% Test
+              │                 │  (locked away)
+    ┌─────────┴──────────┐      │
+    │                    │      │
+  85% Train            15% Val  │
+    │                    │      │
+  Mixup              Threshold  │
+  SMOTE              Calibration│
+  Hard Negative                 │
+  Mining                        │
+    │                           │
+  Train 5 Models                │
+    │                           │
+    └───────────── Final Evaluation ───────────────┘
+                        │
+                  Report Results
+
+Summary for the Briefing Room
+QuestionAnswerWhat real dataset?DroneRF — publicly available IEEE dataset of real drone RF recordingsWhat drones in dataset?AR Drone, Bebop, Phantom, Background noiseWhat if dataset unavailable?Auto-generates realistic synthetic data from published RF statisticsTrain/Test split?80% training, 20% test — test set never touched during trainingHow much data?~7,000-8,000 labelled signal windowsWhat does one data point look like?83 numbers describing one 8192-sample radio signal windowHow is training data enriched?Mixup blending, hard negative recycling, SMOTE balancingWhat is the AI evaluated on?Recall, false alarm rate, hold fraction, flicker, open-set sensitivity
 
 AegisDrone is India's first AI-powered drone threat detection and neutralisation system that learns new threats in the field without retraining, makes decisions in under 100 milliseconds, operates completely offline, and automatically activates countermeasures — built entirely in India, for India's security needs.
 
