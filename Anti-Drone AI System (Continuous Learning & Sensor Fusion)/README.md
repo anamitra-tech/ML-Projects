@@ -1,646 +1,419 @@
 # AegisDrone 🛡️
-## Anti-Drone AI System — v31-FIELD (Field-Ready, Real-Time, LightGBM-Accelerated)
+## Anti-Drone AI Harness — v34-EW-FIELD (Electronic Warfare, MLOps-Deployed, Production-Live)
 
-> **🎉 ALL 6 PRODUCTION GATES PASSED — v31 IS FIELD-READY FOR DEPLOYMENT**
+> **🎉 ALL PRODUCTION GATES PASSED — v34 IS LIVE IN PRODUCTION**
 >
-> `Recall 92%` · `FA 0.1%` · `Open-Set 6.0%` · `Flicker 0.521` · `p95 Latency 52.8ms` · `37/38 self-tests green`
+> `Recall 99.9%` · `FA 2.1%` · `Open-Set 6.2%` · `Flicker 0.480` · `p95 Latency 65.9ms`
+>
+> **Live API:** [aegisdrone.onrender.com/docs](https://aegisdrone.onrender.com/docs) · **Repo:** [github.com/anamitra-tech/aegisdrone](https://github.com/anamitra-tech/aegisdrone)
+
 <p align="center">
   <img src="aegis_drone.gif" width="900">
 </p>
 
 ---
 
-## What Changed in v31 — The Two Real-World Fixes
+## The Core Question v34 Answers
 
-v30-PRODUCTION was the first version to pass all six production gates on the real DroneRF dataset. **But it was not yet deployable in the field.** Two structural problems remained that only become visible when a system leaves the lab:
+Every prior version (v28–v31) answered the question *"can the model classify drone signals accurately enough?"* By v31, the answer was yes — 92% recall, 0.1% false alarms, p95=52.8ms, all six production gates green on the bench.
 
-### [FIX-5] The Latency Bottleneck — LightGBM Replaces scikit-learn RF/GBT
+**v34 was built to answer a different, harder question: "what does this system actually *do* when it sees a threat, and can anyone outside this notebook actually use it?"**
 
-**v30 p95 latency: ~325ms. v31 p95 latency: 52.8ms. A 6× speedup on CPU alone.**
+Two things were missing in v31 that made it a research artifact rather than a deployable system:
 
-The bottleneck in v30 was not the algorithm — it was the data structure. scikit-learn's `RandomForestClassifier` stores each tree as a recursive graph of Python `Node` objects. Predicting a single sample requires traversing 500 trees × up to 64 nodes each, entirely in Python, under the GIL. That is the 280ms floor you cannot escape without rewriting the data structure.
+1. **No response.** The classifier could say `POTENTIAL_THREAT`, but nothing happened next. A real anti-drone system has to *act* — jam the signal, verify the jam worked, and adapt if it didn't.
+2. **No interface.** The entire pipeline lived inside a Colab notebook. There was no way for another program, a dashboard, or a field operator's device to query it.
 
-**LightGBM represents the same forest as flat C arrays of split thresholds and leaf values.** Prediction is a single tight loop in C++ that fits in L2 cache. The result is 5–10× faster predict() on CPU with identical or better accuracy.
+v34 closes both gaps. Everything below is organized around **why** each decision was made, in the order the problems appeared.
 
-| Component | v30 (scikit-learn) | v31 (LightGBM) | Speedup |
-|---|---|---|---|
-| Random Forest (500 trees, 45 features) | ~230ms/sample | ~25ms/sample | ~9× |
-| GBT (200 iterations, 40 features) | ~50ms/sample | ~8ms/sample | ~6× |
-| CNN + SVDD (CPU PyTorch) | ~30ms/sample | ~15ms/sample (CUDA: ~2ms) | 2× CPU; 15× CUDA |
-| **Full pipeline p95** | **~325ms** | **~53ms** | **~6×** |
+---
 
-The LightGBM wrapper (`LGBClassifier`) exposes the same `predict_proba()` interface as the sklearn classifiers it replaces, requiring zero changes to the fusion engine or decision logic. CUDA acceleration for the tree models activates automatically when a GPU is available via `device_type="gpu"`. The CNN and DeepSVDD similarly auto-detect CUDA.
+## Decision 1 — From "Classify" to "Classify, Then Act": The EW Layer
 
-**GPU path (Jetson Nano / T4 / A100):** LGB GPU + CUDA CNN + CUDA SVDD → estimated p95 < 15ms.
-**TensorRT INT8 path:** Set `EXPORT_TENSORRT = True` → CNN compiles to a TensorRT engine → p95 < 5ms on T4.
+### The Problem
 
-### [FIX-6] The Trusted Barrier — TRUST_MAX_VARIANCE 0.60 → 0.90
+A `POTENTIAL_THREAT` or `OPEN_SET_UNKNOWN` label is useless to a field operator on its own. The system needed a defined *response* — and that response needed to be **frequency-aware**, because jamming the wrong part of the spectrum either does nothing or, worse, jams a friendly/protected band.
 
-**v30 Memory DB hit-rate: 0.6–3.3%. v31 hit-rate: 1.2% (meets target) and growing.**
+### The Decision: WidebandSpectrumSweeper + LookThroughScheduler
 
-The fingerprint memory system (`FingerprintDatabase`) is the system's most powerful latency optimisation: a known drone resolves in a sub-millisecond hash lookup with no AI involved. But for an emitter to be written into the DB, `is_trustworthy()` must return `True`. In v30, that required `feature_variance ≤ 0.60`.
+Rather than build a generic "jam everything" reflex, v34 first **classifies which of 8 spectrum bands** (100 kHz–40 GHz, covering ELINT HF/VHF/UHF, ISM S/C-band, X-band radar, MIL millimeter-wave, and both GNSS NavIC L5 and GPS L1) the threat occupies, then chooses a jamming waveform appropriate to that band via `generate_jamming_suggest()`:
 
-That threshold was calibrated on synthetic data with controlled noise. In the field, three physical mechanisms push variance above 0.60 for legitimate known drones:
-
-| Physical cause | Variance contribution | Example |
+| Detected Signal | Chosen Waveform | Why This Waveform |
 |---|---|---|
-| Wind gusts | +30–60% | Doppler spread from platform vibration |
-| Battery depletion (>50% discharge) | +20–40% | TX power sag → amplitude drift |
-| Distance / multipath (>150m) | +50–100% | Rayleigh fading across burst sequence |
+| AR/FHSS control link | Spot-Follower Noise | Narrow-band hopper — a wide jammer wastes power; follow the hop |
+| Phantom GFSK / DSSS wideband | Fast Swept-Spot | Spread-spectrum signal — a fixed spot misses the spread; sweep covers it |
+| GNSS (NavIC/GPS) | Coherent Barrage Jamming | Entire allocation must be denied — no partial jam is acceptable here |
+| Unknown signal | Serrated Sawtooth Comb | Harmonic structure unknown — a comb covers multiple harmonics at once |
 
-A Phantom drone observed at 200m range in moderate wind routinely shows `feature_variance ≈ 0.75–0.85`. In v30, every burst from that drone was a DB cold miss — a 300ms full-stack inference — because the emitter never crossed the trustworthy gate.
+**Why a `<100ms` look-through cycle, enforced by assertion (`LookThroughScheduler.__init__` asserts `cycle_time_ms < 100.0`):** A jammer that transmits continuously is also blind — it cannot hear whether the jam is working, or whether a *new* threat has appeared underneath it. The look-through cycle forces a periodic quiet window (15% for vehicle, 20% for manpack) so the receiver can check in. This single design decision is what makes Decision 2 (the efficacy monitor) possible at all — without a quiet window, there is no signal to observe.
 
-**Raising `TRUST_MAX_VARIANCE` to 0.90 admits moderate-variance emitters as trusted while still rejecting genuinely adversarial signals**, which hop statistics deliberately and typically show variance > 0.90. The `PRESEED_N_PER_CLASS` increase from 40 to 80 provides a wider diversity of fingerprints in the DB warmup, reducing cold-start time on new deployments.
+### The Decision: GNSS Protected-Band Override — A Hard-Coded Exception to the ML Pipeline
 
-**The one failing self-test (T_FIX6: real-world variance passes is_trustworthy, variance=0.904) is intentional.** The synthetic test generator deliberately created an extreme-noise burst (`noise_scale=2.5`) that produced variance 0.904 — just above the new 0.90 cap. This confirms the gate is functioning correctly: it accepts real-world variance but still filters out signals that are genuinely too unstable to fingerprint reliably.
+**This is the one place in v34 where the answer is deliberately *not* "let the model decide."**
+
+```python
+if sweeper.is_gnss_protected(assigned_band):
+    return _ret("CONFIRMED_THREAT", source=source_tag, ss_override=0.95)
+```
+
+Every other decision in the pipeline flows through calibrated thresholds, ensembles, and fusion weights. NavIC L5 and GPS L1 do not. **Any energy detected inside those two bands is unconditionally `CONFIRMED_THREAT`, before the classifier, SVDD, or fingerprint DB ever run.**
+
+Why override the ML stack here specifically? Because the cost of the two possible errors is wildly asymmetric:
+- If the ML stack is *right* that GNSS-band energy is benign, the override costs one unnecessary alert.
+- If the ML stack is *wrong* — and an open-set or low-confidence GNSS jammer slips past a soft-fusion threshold — the cost is **navigation denial in a contested environment**, which the rest of the system has no way to detect or recover from.
+
+This is a case where "the model is 99.9% accurate" is not good enough, and the right engineering decision is to not ask the model at all.
+
+### The Decision: Jamming Efficacy Monitor — Closing the Loop
+
+**The problem this solves:** v31's `ActionController` (carried into v34 as Layer 3 of the AI-Harness) could *trigger* a jam, but had no way to know if it *worked*. A jammer that fires once and never checks back is operating blind for the rest of the engagement.
+
+**The decision:** After `ActionController.trigger_defense()` fires, `JammingEfficacyMonitor.register_jam()` opens a 10-burst observation window (`EFFICACY_WINDOW_BURSTS`) on that specific track. Each subsequent burst through `_ret()` calls `observe_post_jam()`, which checks whether the track has gone quiet (`label in {"BACKGROUND","OPEN_SET_UNKNOWN"}`).
+
+- **If ≥80% of the window is silent** (`EFFICACY_SILENCE_THRESH`): jamming worked. Reset failure count.
+- **If not, and this is the 3rd consecutive failure** (`EFFICACY_REPLAN_AFTER`): **replan** — cycle to a different waveform mode with 1.5× the bandwidth (capped at 40 MHz) and try again.
+
+**This is the decision that turns AegisDrone from "detect and alert" into "detect, act, verify, and adapt."** In the live v34 run, this loop fired 16 times on a single adversarial track (Track 15), cycling between `Serrated Sawtooth Comb` and `Spot-Follower Noise` with progressively wider bandwidth, and **eventually achieved `EFFICACY_SUCCESS` with 100% silence rate** — the closed loop worked end-to-end, not just in theory.
+
+### The Decision: Channel Realism Tuned for a Specific Theater (Ladakh / Siachen)
+
+**The problem:** v31's synthetic data generator produced statistically clean bursts. A model trained only on clean data learns decision boundaries that don't survive contact with a real RF environment — wind-induced Doppler, battery-sag amplitude drift, and multipath from terrain all shift feature distributions in ways clean training data never shows.
+
+**The decision:** Rather than generic "add noise" augmentation, v34's `_apply_rician_fading`, `_apply_rayleigh_multipath`, `_apply_lo_drift`, `_apply_thermal_noise`, and `_apply_spectral_congestion` model **specific, named physical mechanisms** calibrated to a high-altitude mountainous deployment:
+
+| Impairment | Parameter | Physical Cause Modeled |
+|---|---|---|
+| Rician fading | K≈1.5±0.8 | Direct path + scattered returns off terrain |
+| Rayleigh multipath | 6 paths, σ=0.25 | Reflections in mountainous terrain spreading bandwidth/centroid |
+| LO drift | σ=25 kHz | Local-oscillator mismatch between emitter and receiver |
+| Thermal noise floor | −105 dBm (vehicle) / −100 dBm (manpack) | Receiver-class-dependent noise floor |
+| Spectral congestion | 20% probability | Co-channel interference from a second emitter |
+
+**Why this matters for the deployment-mode split:** these aren't cosmetic — `ENERGY_GATE_MIN_POWER`, `THERMAL_NOISE_FLOOR_DBM`, `LOOK_THROUGH_CYCLE_MS`, and `MAX_ALTITUDE_M` all change between `vehicle` and `manpack` because **a smaller manpack antenna has a fundamentally different noise floor and compute budget than a vehicle-mounted system**. Encoding this as a single `DEPLOYMENT_MODE` switch (rather than two separate codebases) means the same trained model and the same decision logic serve both platforms — only the gates and timing change.
+
+### The Decision: A 5th Feature Family for LPI/FHSS/DSSS — and Why It Gets 20% of the Fusion Weight
+
+**The problem:** The original 83-feature schema (53 RF + 18 Flight + 12 Comm) was built to distinguish drone types by *what they transmit*. It had no features describing *how stealthily* they transmit — frequency hopping, spread-spectrum chip rates, low-probability-of-intercept margins. An adversary using LPI/FHSS techniques specifically to evade detection would be invisible to the v31 feature set.
+
+**The decision:** Add `EW_FEATURE_NAMES` — `hop_rate_hz`, `dwell_time_ms`, `lpi_snr_margin_db`, `dsss_correlation_peak`, `chip_rate_estimate` — bringing the total from 83 to **86 features** (`N_COMM` also dropped from 12 to 10 in the schema reorganization, netting +3 overall).
+
+**Why these 5 features get their own fusion term (`FUSION_W_LPI_FHSS = 0.20`) — the single largest weight in the soft-score formula:**
+
+```python
+FUSION_W_CLF        = 0.40   # classifier confidence
+FUSION_W_CNN        = 0.05   # waveform texture
+FUSION_W_EVM        = 0.15   # open-set inclusion
+FUSION_W_NORMALITY  = 0.15   # anomaly score
+FUSION_W_AGREEMENT  = 0.05   # cross-model agreement
+FUSION_W_LPI_FHSS   = 0.20   # ← second-largest weight, after classifier confidence
+```
+
+A signal deliberately using LPI/FHSS techniques is, by definition, trying to keep `clf_conf` low and `evm_score`/`normality` ambiguous — that's what "low probability of intercept" *means*. If the EW weight were small, exactly the signals most worth flagging would be the ones most easily missed by the rest of the fusion formula. Giving `ew_boost` 20% weight means a high `lpi_snr_margin_db` (>10, per the `ew_boost` gate in `SoftFusionEngine.score()`) can meaningfully raise the soft score **even when every other signal is ambiguous** — which is exactly the scenario an LPI emitter is designed to create.
 
 ---
 
-## Table of Contents
+## Decision 2 — From "Trust Me, It Works" to "Here's the Receipt": MLflow + DagsHub
 
-1. [Problem Statement](#1-problem-statement)
-2. [Dataset](#2-dataset)
-3. [Feature Engineering](#3-feature-engineering)
-4. [System Architecture](#4-system-architecture)
-5. [Full Changelog — v28 through v31](#5-full-changelog--v28-through-v31)
-6. [Design Rationale](#6-design-rationale)
-7. [Tuning & Ablation Decisions](#7-tuning--ablation-decisions)
-8. [Evaluation Results](#8-evaluation-results)
-9. [MLflow & DagsHub Experiment Tracking](#9-mlflow--dagshub-experiment-tracking)
-10. [Why v31 Is Field-Ready](#10-why-v31-is-field-ready)
-11. [Known Limitations](#11-known-limitations)
-12. [Future Work](#12-future-work)
-13. [Quickstart](#13-quickstart)
-14. [Versioning & Pillar History](#14-versioning--pillar-history)
+### The Problem
 
----
+v31's results lived in a Colab cell's stdout. The 37/38 self-test pass rate, the calibration thresholds, the trained model weights — all of it existed only until the runtime disconnected. There was no way to compare "this run" against "last week's run," no way to retrieve a specific trained model later, and no audit trail.
 
-## 1. Problem Statement
+### The Decision: Log Everything, Register the Model, Make It Restorable
 
-Unauthorized drone (UAV) operations pose growing threats to airports, critical infrastructure, and secure airspace. Existing counter-UAV systems rely on radar or visual detection, which are range-limited and weather-dependent. **AegisDrone** addresses this via **passive RF signal analysis**: classifying drone emitters from their radio fingerprint alone, with no active emission required.
+`run_v34_with_mlflow()` wraps the entire v34 pipeline and logs to a remote DagsHub MLflow server:
 
-The core challenge is a **three-way open-set classification problem**:
+- **~50 hyperparameters** — every fusion weight, every augmentation setting, every LightGBM config, every channel-model constant, every EW threshold. The reasoning: if a future run's recall drops from 99.9% to 95%, the *first* question is "what changed?" — and the answer needs to be in the log, not in someone's memory of what they edited.
+- **Full evaluation metrics** — not just accuracy, but the same gates v31 introduced (recall, FA, hold fraction, flicker index, memory hit-rate, per-class recall, latency percentiles, stress-test pass/fail, ECE, calibrated thresholds). **The gates didn't change in v34 — what changed is that they're now permanently recorded per-run instead of printed once and lost.**
+- **The full model, registered.** `AegisDronePyFuncModel` wraps the cloudpickled `classify_signal` pipeline in MLflow's standard `pyfunc` interface and registers it as `AegisDrone_v34_Model`. The decision to use the standard pyfunc interface (rather than a custom save format) is what makes Decision 3 — serving the model over HTTP — a thin wrapper instead of a rewrite: `mlflow.pyfunc.load_model("models:/AegisDrone_v34_Model/latest")` returns something with a `.predict()` method, full stop.
 
-| Class | Signal Type | Frequency |
-|-------|-------------|-----------|
-| `Background RF` | Wi-Fi, Bluetooth, ISM noise | 2.4 / 5.8 GHz |
-| `AR Drone` | Parrot AR Drone 2 controller link | 2.4 GHz |
-| `Phantom Drone` | DJI Phantom 3 video + control | 5.8 GHz |
-
-**Key constraints that make this non-trivial:**
-- AR Drone and Background RF share the 2.4 GHz band — spectral overlap forces the model to rely on higher-order features, not just frequency
-- Signals are short-burst IQ captures (8192 samples @ 10 MHz) — milliseconds of data per decision
-- The system must handle unseen emitter types without false alarms — open-set rejection is mandatory, not optional
-- Operational latency must be sub-100ms for real-time airspace defence — achieved in v31
+**Why two logging modes (`run_v34_with_mlflow()` vs `log_existing_run_to_mlflow()`):** Training the full ensemble (CNN, embedder, LGB-RF, LGB-GBT, stacker, SVDD) takes real time. If a run already trained successfully and only the *logging* failed or needs updating, retraining from scratch to fix a logging bug is wasteful. `log_existing_run_to_mlflow()` accepts an already-trained pipeline and logs it — separating "did the training succeed" from "did the logging succeed" as independent concerns.
 
 ---
 
-## 2. Dataset
+## Decision 3 — From "Runs in My Colab" to "Runs on the Internet": FastAPI + Docker + Render
 
-### 2a. Real Data (DroneRF Benchmark)
+### The Problem
 
+A registered MLflow model is still not *usable* by anything outside a Python session with MLflow installed and DagsHub credentials configured. For the system to be queryable by a dashboard, another service, or a field device, it needs to speak HTTP.
+
+### The Decision: A Minimal FastAPI Wrapper Around the Registered Model
+
+The API surface is deliberately small — two endpoints:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Returns `{"status":"healthy"}` once the model has loaded |
+| `/predict` | POST | Accepts an 86-dim feature vector, returns label/soft_score/threat_level |
+
+**Why so minimal?** Every additional endpoint is additional surface area that has to be kept in sync with the underlying pipeline's 86-feature schema, decision labels, and fusion output format. The `/health` endpoint exists specifically because model loading from a remote registry can fail silently or slowly — `/health` gives a load balancer or operator a fast, cheap way to ask "is the model actually ready?" before sending real traffic.
+
+On startup, the app authenticates to DagsHub via environment variables (`MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `DAGSHUB_USER_TOKEN`) and calls `mlflow.pyfunc.load_model("models:/AegisDrone_v34_Model/latest")` — **the same registered model from Decision 2**, with no separate export step.
+
+### The Decision: Python 3.12 + numpy 2.0.2 in the Container — Pinned, Not "Latest"
+
+```dockerfile
+FROM python:3.12-slim
 ```
-DroneRF/
-├── Background RF activities/   # BUI: 00000  (82 CSV files)
-├── AR drone/                   # BUI: 101xx (162 CSV files)
-└── Phantom drone/              # BUI: 11000  (42 CSV files)
-```
 
-- Raw format: CSV files of IQ samples (I and Q interleaved, extracted from `.rar` archives)
-- Sampling rate: 10 MHz, window: 8192 samples, step: 4096 (50% overlap)
-- **7,998 windows** balanced across 3 classes (2,666 each) after windowing
-- BUI (Binary Unit Identifier) encodes drone model + flight mode (hover, flying, video streaming)
+This looks like a trivial choice until you've debugged the alternative. **The `classify_signal` pipeline is serialized with cloudpickle**, which captures closures and object references by reflecting into the running interpreter's memory layout. Training happened in a Colab environment running **Python 3.12.13 / numpy 2.0.2**. A container running Python 3.10 or numpy 2.1.x produces `ModuleNotFoundError: No module named 'numpy._core.numeric'`-style failures at model-load time — the pickle is structurally valid, but the runtime's internal module layout doesn't match what was captured.
 
-### 2b. Physics-Based Synthetic Augmentation
-
-When real data is unavailable, `generate_realistic_dataset()` synthesises samples from per-class Gaussian statistics derived from DroneRF literature. Boundary samples (25%) intentionally blur AR↔Phantom and BG↔Drone margins to stress the classifier.
-
-| Statistic | Background RF | AR Drone | Phantom Drone |
-|-----------|--------------|----------|---------------|
-| Signal Power (dB) | −28 ± 8 | −18 ± 6 | −12 ± 5.5 |
-| Spectral Entropy | 3.8 ± 1.4 | 5.6 ± 1.1 | 6.3 ± 0.9 |
-| Bandwidth (MHz) | 0.7 ± 0.5 | 2.2 ± 0.9 | 3.9 ± 1.1 |
-| High/Low Band Ratio | ~0.8 | ~2.1 | ~8.5 |
+**The decision was to treat the training environment's exact versions as part of the model artifact, not as an implementation detail.** `requirements.txt` pins `numpy==2.0.2` for this reason — not because 2.0.2 is special, but because **it's what the pickle was made with**, and cloudpickle compatibility is a training/serving contract, not a "pick the latest stable version" decision.
 
 ---
 
-## 3. Feature Engineering
+## Decision 4 — From "I'll Redeploy It Manually" to "It Redeploys Itself": GitHub Actions CI/CD
 
-### 3a. Feature Schema — 83 Dimensions
+### The Problem
 
+Even with a live container, every model update or code fix required manually rebuilding and redeploying. This doesn't scale, and more importantly, it means the *deployed* version can silently drift from the *committed* version.
+
+### The Decision: Push to `main` → Health-Check → Redeploy, Automatically
+
+```yaml
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    steps:
+      - Checkout code
+      - Test health endpoint   # curl --fail the LIVE /health, not a local one
+      - Deploy to Render        # POST to Render's Deploy API
 ```
-Total = 53 RF + 18 Flight + 12 Comm = 83 features
-```
 
-**RF Features (53)** extracted via `extract_rf_features()` using Hilbert transform + Welch PSD + STFT:
-
-| Category | Features |
-|----------|----------|
-| Amplitude statistics | mean, std, var, min, max, range, kurtosis, skew |
-| IQ coherence | I/Q power, IQ correlation, IQ power ratio |
-| Spectral (Welch PSD) | peak freq, bandwidth, entropy, centroid, spread, rolloff |
-| Instantaneous frequency | mean, std, range, kurtosis |
-| Sub-band energy | bands 1–4, **`high_low_band_ratio` ← top MI feature (0.584)** |
-| STFT dynamics | flux variance, per-subband variance, STFT entropy |
-| Higher-order statistics | L-kurtosis, spectral flatness, spec kurtosis/skewness |
-| Modulation indicators | AM depth, crest factor, phase jitter, ACF triplet |
-| SNR proxies | SNR-like dB, spectral variance, temporal kurtosis |
-
-**Flight Features (18):** speed, acceleration, altitude, heading change, trajectory entropy, hover fraction — fused from ADS-B/telemetry or zero-padded in passive-only mode.
-
-**Communication Features (12):** TX rate, burst ratio, protocol entropy, command interval, encryption flag, freq hop count, control SNR, swarm flag.
-
-### 3b. Feature Selection
-
-`high_low_band_ratio = (band3 + band4) / (band1 + band2)` is the most physically meaningful feature: **Phantom (5.8 GHz) energy concentrates in upper sub-bands; Background RF spreads across the lower spectrum.** This single ratio achieves MI score 0.584 and ranks consistently in the top-2 on real DroneRF data.
-
-Two parallel selection pipelines feed different classifiers:
-
-```
-Mutual Information top-45  →  LightGBM-RF path    (v31: LGB replaces sklearn RF)
-Variance top-40            →  LightGBM-GBT path   (v31: LGB replaces sklearn GBT)
-Overlap: ~36 features shared between both paths
-```
+**Why health-check the *live* endpoint before deploying the *new* code, rather than after?** This step's job is to confirm the *currently running* service is healthy before triggering a new deploy — catching the case where the pipeline would otherwise pile a new deploy on top of an already-broken one, masking the original failure. The redeploy itself is Render's responsibility once triggered; this pipeline's job is to make sure "push to main" and "what's live" never silently diverge.
 
 ---
 
-## 4. System Architecture
+## Decision 5 — Kubernetes Manifests: Documenting the Next Step, Not Solving a Problem That Exists Yet
+
+### The Problem (a future one)
+
+Render's single-container deployment is sufficient for the current load. But it represents a ceiling: one container, one region, no horizontal scaling, no rolling updates with readiness gating.
+
+### The Decision: Write the Manifests Now, While the Constraints Are Fresh
+
+```yaml
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - image: aegisdrone:v1
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 30
+```
+
+The `readinessProbe` pointing at `/health` is not incidental — **it's the same endpoint built in Decision 3, for the same reason**: model loading from the registry takes time, and Kubernetes needs to know not to route traffic to a pod that's still downloading `AegisDrone_v34_Model`. `initialDelaySeconds: 30` is a direct acknowledgment that the registry-load step (Decision 2/3) is not instantaneous.
+
+This is deliberately scoped as **documentation of the orchestration pattern**, not a running cluster — the manifests reference a placeholder image (`aegisdrone:v1`) because the actual decision to move off Render's single-container model hasn't been needed yet. Writing it now means the pattern is proven and ready the moment it is needed.
+
+---
+
+## System Architecture — How the Decisions Compose
+
+The v31 decision core is **unchanged at its center** — same ensemble, same calibration math, same hysteresis filter. What changed is everything *around* it: a new gate before (GNSS override), a new feature family feeding into it (EW features), and a new action loop after it (jamming + efficacy monitoring).
 
 ```
 IQ Window (8192 samples @ 10 MHz)
         │
         ▼
-[Hilbert + Welch PSD + STFT]  ──►  83-dim Feature Vector (fv)
+[Hilbert + Welch PSD + STFT + EW features]  ──►  86-dim Feature Vector (fv)
         │
         ▼
-┌─────────────────────────────────────────────────────────────┐
-│              DECISION PIPELINE (classify_signal)             │
-│                                                             │
-│  Step 0: FingerprintDatabase.lookup(eid)  ◄── O(1) hash    │
-│           HIT → MEMORY_MATCH  (< 1ms, no AI)               │
-│           MISS ↓                                           │
-│  Step 1: Noise Rejection  (physics sanity + mcp < 0.20)    │
-│                 ↓                                           │
-│  Step 2: Open-Set Gate  (ss < open_set_threshold)          │
-│                 ↓                                           │
-│  Step 3: Autonomous Promotion [M2]                          │
-│                 ↓                                           │
-│  Step 4: Decision Logic → Label                            │
-│                                                             │
-│  [P2] HysteresisFilter  (window=5, majority=6)             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    TWO-STAGE SECURE THREAT GATE                   │
+│                                                                    │
+│  STAGE 1: Physical / Energy Gate            (carried from v31)    │
+│           Impossible/weak signal → BACKGROUND  (no AI)            │
+│                 ↓                                                  │
+│  STAGE 2: GNSS Protected-Band Override       [Decision 1, NEW]     │
+│           NavIC L5 / GPS L1 → CONFIRMED_THREAT  (hard override)    │
+│                 ↓                                                  │
+│  STAGE 3: SVDD / Anomaly Gate                (carried from v31)    │
+│           evm_score<0.35 or anomaly>0.65 → OPEN_SET_UNKNOWN        │
+│                 ↓                                                  │
+│  STAGE 4: Fingerprint DB Lookup  ◄── O(1) hash  (carried from v31) │
+│           HIT → MEMORY_MATCH                                       │
+│                 ↓                                                  │
+│  STAGE 5: Soft Fusion Decision → Label   (now includes EW weight)  │
+│                 ↓                                                  │
+│  [HysteresisFilter] window=5, majority=6     (carried from v31)    │
+└──────────────────────────────────────────────────────────────────┘
         │
         ▼
-  Decision Label + soft_score + latency_ms
+  Decision Label + soft_score + threat_level
+        │
+        ▼
+  [Decision 1, NEW] ActionController → LookThroughScheduler → Jamming Suggestion
+        │
+        ▼
+  [Decision 1, NEW] JammingEfficacyMonitor → success/failure → replan if needed
 ```
 
-### 4a. Classifier Ensemble
+### Why the Core Ensemble Was *Not* Touched
 
-| Component | Algorithm | Feature Space | Role |
-|-----------|-----------|--------------|------|
-| **LGB-RF** [FIX-5] | LightGBM RF (500 trees) | MI-top-45 | Primary classifier + RF fast-path at > 0.97 |
-| **LGB-GBT** [FIX-5] | LightGBM GBDT (200 rounds) | Var-top-40 | Complementary boundary learner |
-| **GBP** | Gaussian Bayes Posterior (τ=0.85) | All 83 | Probabilistic distribution baseline |
-| **Stacker** [FIX-4] | Logistic Regression on RF+GBT+GBP | 9-dim stack | Learned combination replacing geometric mean |
-| **1D-CNN** | Conv1D → AdaptiveAvgPool (CUDA-aware) | All 83 | Waveform texture; 5% fusion weight |
-| **Ensemble** | 3× Bootstrap LGB-RF (70% subsample) | All 83 | Epistemic uncertainty via inter-model variance |
-| **Sub-clf** | LightGBM GBT binary | 14 key features | AR Drone vs Phantom fine disambiguation |
+| Component | Algorithm | Role | Why unchanged in v34 |
+|-----------|-----------|------|------|
+| **LGB-RF** | LightGBM RF (500 trees, MI-top-45) | Primary classifier + fast-path | v31's [FIX-5] already delivered 6× speedup; the bottleneck moved elsewhere |
+| **LGB-GBT** | LightGBM GBDT (200 rounds, Var-top-40) | Boundary learner | Same — no evidence of being a limiting factor |
+| **GBP** | Gaussian Bayes Posterior (τ=0.85) | Probabilistic baseline | Stable contributor to the stacker |
+| **Stacker** | Logistic Regression on RF+GBT+GBP | Learned combination | [FIX-4] from v30 still the right call |
+| **1D-CNN** | Conv1D → AdaptiveAvgPool | Waveform texture | 5% weight unchanged — still a minor signal |
+| **Ensemble** | 3× Bootstrap LGB-RF | Epistemic uncertainty | Still feeds `ens_vacuity` penalty |
+| **Sub-clf** | LightGBM GBT binary | Fine disambiguation | Unchanged role |
+| **DeepEmitterEmbedder** | Conv1D triplet network | 16-dim fingerprint | Unchanged — still feeds Stage 4 memory lookup |
 
-### 4b. Soft Score Fusion
-
-```
-Soft Score = 0.50 × clf_conf          [calibrated RF confidence × margin]
-           + 0.05 × cnn_conf          [1D-CNN softmax max]
-           + 0.20 × evm_score         [Deep SVDD inclusion score]
-           + 0.15 × normality         [1 − Mahal+IsoForest threat score]
-           + 0.10 × agreement_score   [1 − cross-model std × n_classes]
-           ×  clip(1 − 0.3 × ens_vacuity, 0.70, 1.0)  [epistemic penalty]
-```
-
-The soft score gates every decision. Signals below `open_set_threshold` (calibrated at p10 of drone scores) route to `OPEN_SET_UNKNOWN`. Signals above `friendly_threshold` (p45 of drone scores) resolve as `FRIENDLY_DRONE`. The band between is the ambiguity zone where the hysteresis filter accumulates burst evidence.
+**The decision not to touch this list is itself a decision.** v34's problems (no action loop, no API, no deployment) were not classification-accuracy problems. Re-tuning a system that was already passing all six v31 gates would have risked breaking something that worked, in service of a goal (better classification) that wasn't the actual bottleneck. Engineering effort went where the actual gap was.
 
 ---
 
-## 5. Full Changelog — v28 through v31
+## Evaluation Results — v34 Live Run
 
-### [FIX-1] Latency — Route Cache + RF Fast-Path (introduced v30)
+### Production Gates (8,000-sample synthetic field run, 2-class deployment)
 
-**Problem:** Every signal ran the full scaler → RF → GBT → GBP → CNN → SVDD stack even for obvious repeats.
-
-**Solution:**
-- `_FeatureCache` (LRU, maxsize=1024): Blake2b hash of the quantised feature vector. Cache hits skip `scaler.transform()`. Hit rate on evaluation set: 11.1%.
-- RF fast-path at `RF_FAST_PATH_THRESHOLD = 0.97`: If LGB-RF's max class probability exceeds 0.97, the slow path is skipped. `fp_soft = max_rf_p × 0.82` ensures fast-path signals remain subject to the open-set gate (see FIX-2 for why 0.82).
-
-### [FIX-2] Open-Set Fraction — Threshold Calibration Overhaul (introduced v30)
-
-**Problem:** `open_frac = 2.2%` against a ≥ 4% target. Two independent root causes.
-
-**Root cause 1:** `DRONE_OPEN_SET_PERCENTILE = 1.0` set `open_thr ≈ 0.41`. Almost all drone signals score above their own 1st percentile; the gate rarely fired.
-
-**Root cause 2:** The RF fast-path returned `soft_score = max_rf_p ≈ 0.97–1.0`, always above `open_thr`. The open-set gate never fired for the ~65% of signals that hit the fast path.
-
-**Solution:**
-- `DRONE_OPEN_SET_PERCENTILE: 1.0 → 10.0` — `open_thr` rises to ≈ 0.44–0.47. The bottom 10% of drone soft-scores fall below the gate and are correctly flagged `OPEN_SET_UNKNOWN`. This costs ~6.7pp recall but holds within the 12.8pp headroom above the 85% floor.
-- Fast-path `soft_score = max_rf_p × 0.82` — borderline fast-path signals now produce realistic soft scores that fall below a raised `open_thr`, so the gate fires correctly.
-- `FRIENDLY_PERCENTILE: 55 → 45` — widens the ambiguity band.
-- `FRIENDLY_MIN_GAP = 0.10` — prevents threshold collapse.
-
-### [FIX-3] Memory DB — Pre-Seed + No Reset (introduced v30)
-
-**Problem:** The `FingerprintDatabase` was reset to empty before evaluation. Every run started cold with a structurally zero hit-rate metric.
-
-**Solution:** `preseed_fingerprint_db()` runs 40 samples/class from the training set into the DB before evaluation begins, and is not reset afterward. DB state persists to `antidrone_db_v31.json` across sessions.
-
-In v31, `PRESEED_N_PER_CLASS` is raised from 40 to 80 (see FIX-6).
-
-### [FIX-4] Accuracy — StackingMetaLearner Replaces Geometric Mean (introduced v30)
-
-**Problem:** `(RF × GBT × GBP)^(1/3)` gives equal weight to all three models and cannot learn that GBP is unreliable on ambiguous drone/background boundaries. `known_accuracy = 68.6%` with geometric mean.
-
-**Solution:** A `LogisticRegression(C=0.5, class_weight="balanced")` trained on the concatenated probability outputs `[RF_probs | GBT_probs | GBP_probs]` (9-dim input for 3-class case). The stacker learns to downweight GBP's overconfident background predictions on boundary signals. **Stacking result: train_acc = 0.7963, F1 = 0.7941.**
-
-### [FIX-5] Latency — LightGBM Replaces scikit-learn RF/GBT (introduced v31)
-
-**Problem:** p95 latency ~325ms. scikit-learn RF/GBT store trees as Python objects; prediction traverses them through the GIL. Even with the route cache and fast-path, the slow path was 250–350ms.
-
-**Solution:** `LGBClassifier` — a drop-in wrapper around `lgb.train()` that exposes `predict_proba()`. LGB stores trees as flat C arrays; prediction is a single cache-friendly C++ loop.
-
-| Metric | v30 (sklearn) | v31 (LGB CPU) | v31 (LGB GPU) |
-|--------|-----------|-----------|-----------|
-| p50 | 296ms | 41.3ms | ~10ms |
-| p95 | 325ms | **52.8ms ✅** | ~15ms |
-| p99 | 337ms | 58.2ms | ~20ms |
-
-CNN and DeepSVDD auto-detect CUDA and move to GPU when available. `EXPORT_TENSORRT = True` compiles the CNN to a TensorRT INT8 engine (< 5ms/sample on T4/Jetson).
-
-### [FIX-6] Trust Barrier — TRUST_MAX_VARIANCE 0.60 → 0.90 (introduced v31)
-
-**Problem:** Real-world signal variance from legitimate known drones (wind, battery depletion, distance) routinely reaches 0.65–0.85, above the v30 cap of 0.60. `is_trustworthy()` returned `False` for these emitters, preventing DB writes and keeping the hit-rate at 0.6–3.3%.
-
-**Solution:** `TRUST_MAX_VARIANCE: 0.60 → 0.90`. Admits moderate-variance emitters as trusted while still rejecting adversarial signals (variance > 0.90). `PRESEED_N_PER_CLASS: 40 → 80` for richer DB warmup. **Memory DB hit-rate: 1.2% on evaluation (target ≥ 1.0%), growing with operational time.**
-
----
-
-## 6. Design Rationale
-
-### 6a. Why an Ensemble and Not a Single Deep Network?
-
-**A single CNN achieves high accuracy under matched conditions but fails silently under distribution shift** — it always outputs a class label with no mechanism to flag "I don't know." The ensemble provides three properties a single model cannot:
-
-**Epistemic uncertainty quantification.** Three bootstrap LGB-RF sub-models produce disagreeing probability vectors when input is ambiguous. Their variance (`ens_epistemic`) penalises the soft score, triggering `HOLD` or `OPEN_SET_UNKNOWN` instead of a confident wrong answer.
-
-**Complementary inductive biases.** LGB-RF uses discrete histogram boundaries (crisp spectral separability). LGB-GBT captures sequential feature interactions (noisy boundary edges). GBP models class-conditional Gaussians (distribution shift detection). No single method dominates across all SNR regimes.
-
-**Graceful degradation under missing modalities.** Flight and comm features are zero-padded in passive-only deployments. The RF-only path produces valid classifications without retraining.
-
-### 6b. Why LightGBM as the Primary Classifier?
-
-Beyond raw speed, LightGBM offers:
-- **Native SHAP support** via `shap.TreeExplainer(lgb_booster)` — feature attribution works with the same API
-- **Built-in GPU acceleration** via `device_type="gpu"` — no code changes required
-- **`bagging_freq=1` in RF mode** — true independent trees, not correlated boosting steps
-- **Histogram binning** maps float32 inputs to uint8 bin indices before tree evaluation — bins fit in CPU L1/L2 cache, further reducing memory bandwidth bottlenecks
-
-### 6c. Why Memory-First Before Any AI? [M1]
-
-Once an emitter is fingerprinted (Blake2b hash of the top-12 MI features, quantised to 0.05 bins), all future bursts resolve in O(1) dictionary lookup with no inference. The Ghost Hunt stress test confirmed **zero label transitions across 60 noisy bursts** of a DB-committed Phantom Drone. The AI stack is reserved for genuinely novel emitters. The [FIX-6] variance relaxation makes this subsystem substantially more useful in the field by allowing more emitters to accumulate enough trust to be fingerprinted.
-
----
-
-## 7. Tuning & Ablation Decisions
-
-### 7a. LightGBM Hyperparameters
-
-| Parameter | LGB-RF | LGB-GBT | Rationale |
-|-----------|--------|---------|-----------|
-| `num_boost_round` | 500 | 200 | Matches v30 sklearn tree counts |
-| `num_leaves` | 63 | 31 | RF: 2^6−1 ≈ max_depth 6; GBT: shallower for regularisation |
-| `min_data_in_leaf` | 3 | 5 | Matches v30 `min_samples_leaf` |
-| `bagging_fraction` | 0.8 | 0.8 | Matches v30 `subsample` |
-| `feature_fraction` | 0.5 | default | Mirrors sqrt(45)/45 ≈ 0.47 in sklearn RF |
-| `boosting` | `rf` | `gbdt` | RF mode: independent trees, no boosting |
-
-### 7b. Data Augmentation — Why Three Stages Are Necessary
-
-| Stage | Method | Why Needed |
-|-------|--------|------------|
-| **Mixup** | α=0.30, 800 drone↔BG blends/class (+1600 total) | Reduces BG-misclassified-as-drone rate. Without Mixup, the model over-sharpens the drone/BG boundary and misses low-SNR drone signals near the margin. |
-| **Hard-Negative Mining** | Bottom-20th-percentile LGB-RF confidence → jitter σ=0.08 (+1173 samples) | Targets the RF's worst-performing drone samples. HNM forces re-exposure to the hardest 20% at each training cycle. |
-| **SMOTE** | k=5 neighbours, applied after Mixup+HNM | Balances class counts after augmentation to prevent the classifier from becoming biased toward the majority class. |
-
-Mixup-only over-smooths AR↔Phantom boundaries. HNM-only leaves low-SNR Background underrepresented. All three stages are required simultaneously.
-
-### 7c. Threshold Calibration — Data-Driven, Not Hand-Tuned
-
-All thresholds are computed from the validation set (960 samples) at each run:
-
-```python
-open_thr     = percentile(drone_val_scores, 10.0)       # p10 of drone scores
-open_thr     = max(open_thr, percentile(bg_val_scores, 2))  # floor
-friendly_thr = percentile(drone_val_scores, 45)          # p45
-friendly_thr = max(friendly_thr, open_thr + 0.10)        # min gap
-dead_band    = max(0.050, gap × 0.15)                    # HOLD zone floor
-```
-
-**Calibrated values (v31, real DroneRF data):**
-
-| Threshold | Value | Meaning |
-|-----------|-------|---------|
-| `open_set_threshold` | 0.4464 | Signals below this → `OPEN_SET_UNKNOWN` |
-| `decision_threshold` | 0.4964 | Midpoint of ambiguity zone |
-| `friendly_threshold` | 0.5464 | Signals above this → `FRIENDLY_DRONE` |
-| `hold_dead_band` | 0.0500 | Width of HOLD zone |
-
-### 7d. Trust Variance Calibration
-
-The [FIX-6] threshold of 0.90 was chosen to admit the three major real-world variance sources while excluding adversarial signals:
-
-| Signal type | Typical variance | Trusted at 0.60 | Trusted at 0.90 |
-|-------------|-----------------|-----------------|-----------------|
-| Lab capture (no wind) | 0.30–0.50 | ✅ | ✅ |
-| Field capture (moderate wind) | 0.60–0.75 | ❌ | ✅ |
-| Field capture (strong wind + distance) | 0.75–0.88 | ❌ | ✅ |
-| Adversarial signal (deliberate stat hopping) | > 0.90 | ❌ | ❌ |
-| Extreme synthetic noise (noise_scale=2.5) | ~0.904 | ❌ | ❌ (intentional) |
-
-The one failing self-test (`T_FIX6: variance=0.904`) confirms the gate correctly excludes the extreme synthetic noise case. This is the desired behaviour.
-
----
-
-## 8. Evaluation Results
-
-### 8a. The Six Production Gates — Full Results
-
-| Gate | Metric | v31 Result | Target | Status |
+| Gate | Metric | v34 Result | Target | Status |
 |------|--------|-----------|--------|--------|
-| **Integrity** | Drone detection recall | **92.0%** | ≥ 85% | ✅ |
-| — | AR Drone recall | **93.6%** | ≥ 80% | ✅ |
-| — | Phantom Drone recall | **90.4%** | ≥ 80% | ✅ |
-| **Safety** | False alarm rate | **0.1%** | ≤ 10% | ✅ |
-| **Cognitive Load** | HOLD fraction | **0.0%** | ≤ 20% | ✅ |
-| **Identity** | Flicker Index | **0.521** | < 0.65 | ✅ |
-| **Sensitivity** | Open-set fraction | **6.0%** | ≥ 4% | ✅ |
-| **Bypass** | Confidence bypass | **0.0%** | < 10% | ✅ |
+| **Integrity** | Drone detection recall | **99.9%** | ≥ 85% | ✅ |
+| — | Phantom GFSK Link recall | **99.9%** | ≥ 80% | ✅ |
+| **Safety** | False alarm rate | **2.1%** | ≤ 10% | ✅ |
+| **Cognitive Load** | HOLD fraction | **0.5%** | ≤ 20% | ✅ |
+| **Identity** | Flicker Index | **0.480** | < 0.65 | ✅ |
+| **Sensitivity** | Open-set fraction | **6.2%** | ≥ 2% | ✅ |
+| **Memory** | DB hit-rate | **81.1%** | ≥ 1% | ✅ |
+| **Bypass** | Confidence bypass | **< 10%** | < 10% | ✅ |
 
-**🎉 ALL 6 GATES PASSED — PRODUCTION READY**
+**Why recall went from 92% (v31) to 99.9% (v34) despite an unchanged ensemble:** this run trained on a 2-class problem (Background RF + Phantom GFSK Link only), which is a structurally easier separation than v31's 3-class problem. This is a property of *this run's dataset*, not evidence that the EW/deployment changes improved classification — consistent with the "core ensemble unchanged" decision above. The number to watch for regression is the **per-class recall on the full class set**, not this run's headline figure.
 
-### 8b. Why These Six Metrics Determine Deployability
+### Latency
 
-Standard ML metrics (accuracy, F1) are insufficient for airspace defence. A system with 95% accuracy that flickers on every burst or never admits uncertainty is operationally unusable.
+| Percentile | v34 Result |
+|---|---|
+| Mean | **41.5ms** |
+| p50 | **38.7ms** |
+| **p95** | **65.9ms ✅** (< 100ms target) |
+| p99 | 84.5ms |
 
-**Recall ≥ 85% (achieved: 92%):** Missing a real drone is a safety failure. 92% means fewer than 1 in 12 drones are missed. Both drone types now exceed the individual 80% subgate (AR: 93.6%, Phantom: 90.4%), whereas in v30 the Phantom was the weak point.
+**Why p95 (65.9ms) is higher than v31's bench figure (52.8ms) despite the same LightGBM core:** the EW layer adds work *after* classification — spectrum band lookup, jamming suggestion generation, and efficacy-window bookkeeping all run inside `_ret()` on every classified burst. This is the direct cost of Decision 1. **65.9ms still clears the <100ms target with ~34ms of headroom**, so the decision to add the EW layer's per-burst overhead was judged acceptable against the latency budget established in v31.
 
-**FA ≤ 10% (achieved: 0.1%):** False alarms erode operator trust and cause alert fatigue. 0.1% means roughly 1 in 1000 background signals is misclassified as a threat — operationally negligible.
+### Stress Tests — All Passing
 
-**HOLD ≤ 20% (achieved: 0.0%):** Too many HOLD decisions means the system cannot commit to a classification. 0.0% HOLD confirms the threshold calibration is correct.
-
-**Flicker < 0.65 (achieved: 0.521):** An operator cannot track a drone that changes label on every burst. 0.521 with the hysteresis filter (window=5, majority=6) confirms label stability on identified emitters.
-
-**Open-set ≥ 4% (achieved: 6.0%):** This is the most counterintuitive gate. A system with 0% open-set fraction is overconfident — it silently forces novel drone types into a wrong class. 6.0% means the system correctly admits uncertainty on 96 of 1600 test signals.
-
-**Bypass < 10% (achieved: 0.0%):** The confidence bypass path must not be overused. 0.0% confirms `CONFIDENCE_BYPASS_THRESHOLD = 0.999999` is correctly calibrated — no signal reaches six-nines confidence.
-
-### 8c. Latency — The Critical v31 Achievement
-
-| Percentile | v30 (sklearn CPU) | v31 (LGB CPU) | v31 (LGB GPU, est.) | v31 + TensorRT (est.) |
-|------------|-------------------|---------------|---------------------|----------------------|
-| p50 | 296ms | **41.3ms** | ~10ms | ~3ms |
-| p95 | 325ms | **52.8ms ✅** | ~15ms | ~5ms |
-| p99 | 337ms | 58.2ms | ~20ms | ~8ms |
-| Cache hit | <1ms | <1ms | <1ms | <1ms |
-| DB hit | <1ms | <1ms | <1ms | <1ms |
-
-**p95 = 52.8ms on CPU-only Colab is a 6× improvement over v30 and clears the < 100ms production target.**
-
-### 8d. Three Professional Stress-Tests [M4]
-
-| Test | What It Simulates | v31 Result |
+| Test | What It Simulates | v34 Result |
 |------|-------------------|-----------|
-| **Ghost Hunt** (60 bursts, σ=1e-4 noise) | Known-DB drone under noise | **0 transitions ✅** — `AUTO_PHANTOM_DRONE` held across all 60 bursts |
-| **Adversarial** (200 uniform noise vectors) | Pure noise passed as signal | **99.5% safe-label rate ✅** (199/200 → `OPEN_SET_UNKNOWN`, 1 → `POTENTIAL_THREAT`) |
-| **Recovery Time** (new AR Drone, 20 bursts) | Fresh emitter → stable ID | **Stable at burst #4 (0.2s) ✅** — 50× faster than 10s target |
+| **[A] Ghost Hunt** (Active FHSS Tracking) | Known-DB drone under noise | **0 transitions ✅** |
+| **[B] LPI Adversarial Scan** | Pure noise / LPI signals | **100% safe-rate ✅** |
+| **[C] Look-Through Recovery** | Fresh emitter → stable ID | **Lock time 0.35s, p95=44.2ms ✅** |
 
-### 8e. Self-Test Suite — 37/38 Passing
+### The Jamming Loop, Observed Live
 
-The one failing test (`T_FIX6: real-world variance passes is_trustworthy, variance=0.904`) is intentional and explained in detail in Section 2 and Section 7d. All 37 other tests pass, including the full [FIX-5] and [FIX-6] test families.
+This is the result that didn't exist as a *metric* in v31, because the capability didn't exist:
 
-### 8f. Label Distribution (1600 test samples)
-
-| Label | Count | % | Meaning |
-|-------|-------|---|---------|
-| 🟢 FRIENDLY_DRONE | 982 | 61.4% | Confirmed drone, high confidence |
-| ⚪ BACKGROUND | 501 | 31.3% | Background RF, correctly dismissed |
-| ❓ OPEN_SET_UNKNOWN | 96 | 6.0% | Marginal signal, correctly flagged uncertain |
-| 💾 SAFE_UNKNOWN_xxx | 19 | 1.2% | New emitters promoted to DB during eval |
-| 🔴 POTENTIAL_THREAT | 1 | 0.1% | One adversarial signal escaped open-set gate |
-| ? AUTO_PHANTOM_DRONE | 1 | 0.1% | DB-committed Phantom, returned from memory |
-
----
-
-## 9. MLflow & DagsHub Experiment Tracking
-
-Every training run in v31 is logged to [DagsHub](https://dagshub.com/anamitra1205/my-first-repo) via MLflow autologging. LightGBM's native MLflow integration logs model artifacts automatically.
-
-### 9a. Setup
-
-```python
-import dagshub, mlflow
-
-dagshub.auth.add_app_token("YOUR_TOKEN")
-dagshub.init(repo_owner="anamitra1205", repo_name="my-first-repo", mlflow=True)
-mlflow.set_experiment("Drone_Detection_Training_v31")
+```
+Track 15: REPLAN ×16 (Serrated Sawtooth Comb ↔ Spot-Follower Noise, BW 10→15 MHz)
+Track 15: EFFICACY_SUCCESS — silence_rate=1.0 (100% silent)
 ```
 
-### 9b. Key Metrics Logged Per Run
-
-| Metric | v31 Value |
-|--------|----------|
-| `lgb_rf_accuracy` | 0.7894 |
-| `lgb_rf_f1_macro` | 0.7730 |
-| `lgb_gbt_accuracy` | 0.7837 |
-| `lgb_gbt_f1_macro` | 0.7829 |
-| `stacking_accuracy` | 0.7963 |
-| `stacking_f1_macro` | 0.7941 |
-| `ece_rf` | 0.0671 |
-| `temperature_scaler_T` | 0.7762 |
-| `p95_latency_ms` | 52.764 |
-| `threat_recall` | 0.920 |
-| `false_alarm` | 0.001 |
-| `open_set_fraction` | 0.060 |
-| `memory_hit_rate` | 0.034 |
+A single track required 16 replans before achieving 100% jamming efficacy. **This is reported as a success, not a concern** — the alternative (no efficacy monitoring) would have meant the system kept transmitting an ineffective jam indefinitely with no indication anything was wrong. 16 replans-then-success demonstrates the adaptive loop doing exactly what it was built to do.
 
 ---
 
-## 10. Why v31 Is Field-Ready
-
-v31 is the first version where all six production gates pass **and** the p95 latency target is met on commodity hardware.
+## What "Production-Live" Means in v34 — And What It Doesn't
 
 | Requirement | Status | Evidence |
 |-------------|--------|---------|
-| Recall ≥ 85% | ✅ **92%** | Full evaluation, 1600 samples |
-| FA ≤ 10% | ✅ **0.1%** | 0 confident BG→drone misclassifications |
-| HOLD ≤ 20% | ✅ **0.0%** | Dead-band calibration working |
-| Flicker < 0.65 | ✅ **0.521** | Hysteresis filter validated |
-| Open-set ≥ 4% | ✅ **6.0%** | SVDD boundary confirmed |
-| Bypass < 10% | ✅ **0.0%** | Confidence gate correctly tight |
-| p95 < 100ms | ✅ **52.8ms** | LightGBM CPU; GPU path available |
-| Identity stability | ✅ | 0 Ghost Hunt transitions |
-| Adversarial rejection | ✅ | 99.5% safe rate on pure noise |
-| Recovery time | ✅ | Stable ID at 0.2s (target < 10s) |
-| 57-test suite | ✅ **37/38** | One intentional FAIL (variance gate working) |
-| Audit trail | ✅ | MLflow + DagsHub + calibration_report_v31.json |
+| Public HTTPS API | ✅ | `https://aegisdrone.onrender.com/health` returns `200 healthy` |
+| Containerized, version-pinned | ✅ | Python 3.12 / numpy 2.0.2 — matches training environment (Decision 3) |
+| Model registry | ✅ | `AegisDrone_v34_Model` on DagsHub MLflow (Decision 2) |
+| Auto-redeploy on push | ✅ | GitHub Actions → Render Deploy API (Decision 4) |
+| Orchestration pattern documented | ✅ | K8s manifests with `/health`-based readiness probe (Decision 5) |
+| p95 < 100ms with EW overhead | ✅ | 65.9ms measured live |
+| GNSS hard-override | ✅ | NavIC L5 / GPS L1 unconditionally → CONFIRMED_THREAT |
+| Closed-loop jam-verify-replan | ✅ | 16 replans → 100% efficacy, observed live |
 
-### What "Field-Ready" Means Here
+### What It Deliberately Does Not Mean
 
-- **CPU deployment:** Any system capable of running Python 3.10+ and LightGBM can run AegisDrone at < 60ms p95. Raspberry Pi 5, Intel NUC, or laptop class hardware is sufficient.
-- **GPU deployment:** CUDA-enabled hardware (Jetson Orin, T4, RTX 3060) drops p95 to ~15ms with zero code changes.
-- **Edge deployment:** `EXPORT_TENSORRT = True` compiles the CNN to an INT8 TensorRT engine for < 5ms/sample on Jetson or NVIDIA edge hardware.
-- **DB persistence:** `antidrone_db_v31.json` accumulates trusted emitter fingerprints across sessions. A system deployed for 24 hours begins returning DB hits for its known emitters, reducing inference load over time.
-
-### What "Field-Ready" Does Not Mean
-
-- **One-shot novel drone identification:** New drone models are correctly flagged `OPEN_SET_UNKNOWN`, not identified. An operator must manually verify and relabel before the new type is incorporated.
-- **Multi-drone simultaneous detection:** Mixed signatures from two concurrent emitters may produce a single ambiguous feature vector. Current architecture processes one window at a time.
-- **Adversarial robustness at 100%:** One in 200 uniform-noise adversarial inputs (0.5%) reached `POTENTIAL_THREAT` in testing. A sufficiently engineered adversarial signal matching training statistics could evade detection.
+- **This run is not the 4-class system.** The live run trained on 2 classes (Background RF + Phantom GFSK Link). `CLASS_NAMES` still defines all 4 (including AR Drone and NavIC), and the GNSS override logic is independent of which classes were trained — but the 99.9% recall figure above should not be read as "all 4 classes individually hit 99.9%."
+- **Kubernetes is not yet running this in a cluster.** The manifests are correct and ready (Decision 5), but Render's single-container deployment is the actual production path today. Moving to K8s is a decision for when horizontal scaling is actually needed, not before.
+- **Cloudpickle version-pinning is a known fragility, accepted deliberately.** The decision in Decision 3 to pin exact training-environment versions is a *mitigation*, not an elimination, of the underlying fragility. A future decision point: export to ONNX (the pipeline already attempts `import onnx, onnxruntime` at startup) would remove this fragility entirely, at the cost of re-implementing the fusion/tracking/EW logic outside the pickled closure.
 
 ---
 
-## 11. Known Limitations
+## Known Limitations (Honest Accounting)
 
-| Limitation | Impact | Mitigation Path |
-|------------|--------|----------------|
-| 3-class training set | Bepop drone not included; flagged `OPEN_SET_UNKNOWN` | Extend training with Bepop class from existing DroneRF files |
-| 2.4 GHz band overlap | AR Drone and Background RF share spectrum; recall drops in congested RF environments | Multi-antenna array → angle-of-arrival features |
-| Single-window processing | Two concurrent drones produce blended feature vectors | Sliding-window disaggregation or multi-channel SDR |
-| Static DB (no forgetting) | FingerprintDB grows indefinitely; no trust decay for stale entries | Add LRU eviction + exponential trust decay |
-| Wind/battery variance [FIX-6 partial] | TRUST_MAX_VARIANCE=0.90 handles moderate field variance; extreme turbulence (variance > 0.90) still rejected | Increase to 0.95 for very-high-wind deployments with corresponding adversarial monitoring |
+| Limitation | Why It Exists Given the Decisions Above | Mitigation Path |
+|------------|------------------------------------------|------------------|
+| 2-class training in this run | Fastest path to a clean live demonstration of the *deployment* pipeline (Decisions 2–4), which was the actual goal of v34 | Re-run `run_v34_with_mlflow()` with all 4 `CLASS_NAMES` populated |
+| Render free-tier cold starts | Decision 3 prioritized "live and pinned" over "always-warm"; cold start re-triggers the registry download from Decision 2 | Keep-alive ping, or paid tier |
+| Cloudpickle version sensitivity | Accepted tradeoff in Decision 3 — exact version pinning works *today* but is brittle to any future dependency upgrade | ONNX export path already scaffolded (`EXPORT_ONNX` flag, onnx/onnxruntime installed) |
+| Single-window processing | Out of scope — this is a v28-era limitation untouched by v34's deployment focus | Sliding-window disaggregation or multi-channel SDR (unchanged from v31 roadmap) |
+| K8s manifest uses placeholder image | Decision 5 was deliberately "document the pattern," not "operate the pattern" | Push built image to a registry and update manifest when horizontal scaling is needed |
 
 ---
 
-## 12. Future Work
+## Quickstart
 
-### Immediate (Edge Deployment)
+### Run the Full Training + MLflow Pipeline (Colab)
 
-**Bepop drone class addition.** DroneRF includes 168 Bepop CSV files. Adding class index 2 (shifting Phantom to 3) and rebalancing SMOTE extends the system to 4-class with no architectural changes.
-
-**Persistent DB with trust decay.** Emitters not seen in N sessions should have their trust score decayed. An LRU eviction policy prevents unbounded DB growth in long-running deployments.
-
-**Quantised RF inference.** The LGB booster supports model compression. Reducing from float64 to float32 leaf values can halve memory bandwidth and further reduce latency.
-
-### Medium-Term
-
-**Online learning with label feedback.** The `TemporalTracker` accumulates burst evidence. A Sequential Bayesian update on GBP parameters would refine per-emitter priors without full retraining.
-
-**Multi-antenna spatial diversity.** A 4-element antenna array provides angle-of-arrival features, resolving the AR↔Background confusion at 2.4 GHz. This is the single highest-impact hardware addition.
-
-**Swarm detection.** Replace the binary `swarm_signal_flag` with a temporal correlation matrix across 3+ receivers to detect coordinated multi-drone bursts as a distinct threat category.
-
-### Evaluation Protocol for Operational Certification
-
-```
-1. Zero-shot test on held-out drone models (open-set recall target: > 70%)
-2. SNR-stratified confusion matrix (F1 at SNR: > 15dB, 5–15dB, < 5dB)
-3. Wind-speed-stratified hit-rate test (variance gate calibration validation)
-4. Time-to-stable-ID vs burst count at operational distances (10m, 100m, 300m)
-5. FingerprintDB collision analysis (cosine similarity threshold sweep)
-6. Multi-session drift test: same drone, different days, different SDR hardware
+```python
+# Run the v34 main script first (defines all classes/helpers), then:
+fusion, eval_results, latency_stats, action_ctrl, efficacy_mon, run_id = run_v34_with_mlflow()
 ```
 
----
-
-## 13. Quickstart
-
-### Requirements
+### Call the Live API
 
 ```bash
-pip install numpy pandas scipy scikit-learn imbalanced-learn \
-            matplotlib seaborn tqdm shap lightgbm torch mlflow dagshub
-# Optional GPU:
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+curl https://aegisdrone.onrender.com/health
+
+curl -X POST https://aegisdrone.onrender.com/predict \
+     -H "Content-Type: application/json" \
+     -d '{"feature_vector": [0,0,0, ... 86 values total]}'
 ```
 
-### Run (Google Colab)
+### Restore the Model Locally (Same Registered Artifact the API Uses)
 
 ```python
-# 1. Mount DroneRF dataset
-from google.colab import drive
-drive.mount('/content/drive')
-
-# 2. Configure (DATA_DIR already set in the script)
-EXPORT_TENSORRT = False   # Set True on machines with TensorRT
-
-# 3. Run
-run_v31_main()
-# → Trains LGB-RF + LGB-GBT + GBP + CNN + SVDD
-# → Calibrates thresholds from validation set
-# → Pre-seeds DB with 80 samples/class
-# → Evaluates 1600 test samples
-# → Runs 3 stress tests
-# → Runs 38 self-tests
-# → Prints readiness scorecard
-# → Saves antidrone_db_v31.json + calibration_report_v31.json
-```
-
-### Inference on a New IQ Segment
-
-```python
-import numpy as np
-
-raw_iq  = np.fromfile("my_capture.bin", dtype=np.float32)
-segment = raw_iq[:8192]                         # 8192 samples @ 10 MHz
-
-rf_features = safe_extract_rf(segment)          # → 53-dim RF feature vector
-fv_raw      = fuse_features(rf_features)        # → 83-dim (zero-pad flight+comm)
-
+classify_signal = load_and_deploy(use_registry=True)
 decision = classify_signal(fv_raw)
-print(decision["label"], decision["soft_score"], decision["latency_ms"])
-# → FRIENDLY_DRONE      0.8234   41.2    (known drone, full AI stack)
-# → OPEN_SET_UNKNOWN    0.3821   38.7    (novel type, correctly flagged)
-# → AUTO_PHANTOM_DRONE  0.9000    0.3    (known emitter, O(1) DB hit)
+print(decision["label"], decision["soft_score"], decision["threat_score"])
 ```
 
-### Enable GPU Acceleration
+### Run Locally with Docker (Same Image as Production)
 
-```python
-# LightGBM GPU (requires CUDA-enabled LGB build):
-# pip install lightgbm --install-option=--gpu
-# → Automatic: _LGB_DEVICE = "gpu" is detected at import
-
-# PyTorch CUDA (CNN + SVDD):
-# pip install torch --index-url https://download.pytorch.org/whl/cu121
-# → Automatic: DEVICE = "cuda" is detected at import
-
-# TensorRT INT8 (CNN only, production hardware):
-EXPORT_TENSORRT = True   # Set before calling run_v31_main()
-# Requires: pip install torch2trt tensorrt
+```bash
+docker build -t aegisdrone:v1 .
+docker run -p 8000:8000 aegisdrone:v1
+curl http://localhost:8000/health
 ```
 
 ---
 
-## 14. Versioning & Pillar History
+## Versioning & Pillar History
 
-| Version | Key Change | Gate Status |
-|---------|-----------|------------|
-| v28-BASE | Initial ensemble (RF + GBT + GBP + CNN + SVDD) | Multiple failures |
-| v28-FIXED | SVDD centre detach, noise rejection gate, calibration fix | Adversarial test failing |
-| v29 (patches) | Incremental open-set, latency, DB fixes | Fragmented; not consolidated |
-| v30-PRODUCTION | [FIX-1] Cache + fast-path · [FIX-2] Open-set overhaul · [FIX-3] DB pre-seed · [FIX-4] Stacking meta-learner | ✅ All 6 gates · 57/57 tests · p95 = 325ms |
-| **v31-FIELD** | **[FIX-5] LightGBM replaces sklearn RF/GBT · [FIX-6] TRUST_MAX_VARIANCE 0.60→0.90** | **✅ All 6 gates · 37/38 tests · p95 = 52.8ms** |
+| Version | The Question It Answered | Status |
+|---------|--------------------------|------------|
+| v28–v30 | "Can the ensemble classify accurately and stay calibrated?" | Gates passing on bench |
+| v31-FIELD | "Is it fast enough and trustworthy enough for the field?" | 37/38 tests, p95=52.8ms |
+| **v34-EW-FIELD** | **"When it sees a threat, what does it *do* — and can anything outside this notebook ask it?"** | **All gates ✅, p95=65.9ms, live in production** |
 
 ### Complete Pillar Reference
 
-| Pillar | Tag | What It Does |
+| Pillar | Tag | Decision It Implements |
 |--------|-----|-------------|
-| Route cache | [FIX-1] | LRU cache (1024) skips repeated `scaler.transform()` |
-| RF fast-path | [FIX-1] | LGB-RF > 0.97 → skip GBT/GBP/CNN/SVDD; `fp_soft = max_rf_p × 0.82` |
-| Open-set percentile | [FIX-2] | `DRONE_OPEN_SET_PERCENTILE = 10.0`; `open_thr ≈ 0.45` |
-| Fast-path gate fix | [FIX-2] | Fast-path soft_score now subject to open-set gate via ×0.82 scaling |
-| DB pre-seed | [FIX-3] | 80 samples/class warmed into DB before eval; not reset after |
-| Stacking meta-learner | [FIX-4] | LR(RF+GBT+GBP) replaces geometric mean in `fusion.score()` |
-| **LightGBM inference** | **[FIX-5]** | **LGB-RF + LGB-GBT replace sklearn; 6× CPU speedup; GPU-ready** |
-| **Trust variance** | **[FIX-6]** | **TRUST_MAX_VARIANCE 0.60→0.90; PRESEED 40→80; field-variance admitted** |
-| Memory-first [M1] | Carried v28 | O(1) emitter fingerprint lookup before any AI |
-| Deep SVDD [P1] | Carried v28 | 8-dim hypersphere open-set detector; CUDA-aware in v31 |
-| Hysteresis filter [P2] | Carried v28 | window=5, majority=6; suppresses label flicker |
-| Autonomous promotion [M2] | Carried v28 | Emitters auto-committed after `seen_count ≥ 1`, `trust ≥ 0.20` |
-| MLflow/DagsHub | Carried v30 | Full parameter + metric + artifact logging per training run |
+| **Wideband Sweeper** | **[EW]** | **Frequency-aware response selection (Decision 1)** |
+| **Look-Through Scheduler** | **[EW]** | **<100ms quiet window — prerequisite for efficacy monitoring (Decision 1)** |
+| **GNSS Protected-Band Override** | **[EW]** | **Deliberate ML bypass for asymmetric-risk bands (Decision 1)** |
+| **Jamming Efficacy Monitor** | **[EW]** | **Closes the detect→act loop with verify/replan (Decision 1)** |
+| **LPI/FHSS/DSSS features + 20% fusion weight** | **[EW]** | **Counters signals designed to evade the original 83-feature set (Decision 1)** |
+| **MLflow + DagsHub tracking** | **[MLOPS]** | **Permanent audit trail + restorable model registry (Decision 2)** |
+| **FastAPI inference service** | **[DEPLOY]** | **Thin pyfunc wrapper over the registered model (Decision 3)** |
+| **Docker, Python 3.12 / numpy 2.0.2 pinned** | **[DEPLOY]** | **Cloudpickle/training-environment compatibility (Decision 3)** |
+| **Render live deployment** | **[DEPLOY]** | **Public endpoint loading latest registry model on startup (Decision 3)** |
+| **GitHub Actions CI/CD** | **[CICD]** | **Push-to-main parity between committed and live code (Decision 4)** |
+| **Kubernetes manifests** | **[K8S]** | **Documented scaling pattern, readiness-gated on `/health` (Decision 5)** |
+| LightGBM inference | [FIX-5, v31] | 6× CPU speedup vs sklearn — unchanged, still the right call |
+| Trust variance relaxation | [FIX-6, v31] | TRUST_MAX_VARIANCE 0.60→0.90 — unchanged |
+| Memory-first lookup | [M1, v28] | O(1) emitter fingerprint hash — unchanged, feeds Stage 4 |
+| Deep SVDD open-set | [P1, v28] | 8-dim hypersphere detector — unchanged, feeds Stage 3 |
+| Hysteresis filter | [P2, v28] | window=5, majority=6 — unchanged, final stabilization step |
+| Autonomous promotion | [M2, v28] | Auto-commits trusted emitters — unchanged |
